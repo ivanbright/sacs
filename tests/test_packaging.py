@@ -70,6 +70,8 @@ def test_wheel_excludes_web_and_tmp(artifacts):
 
 
 def test_metadata_names_are_correct(artifacts):
+    import sacs
+
     wheel, _ = artifacts
     with zipfile.ZipFile(wheel) as z:
         meta_name = next(n for n in z.namelist() if n.endswith(".dist-info/METADATA"))
@@ -77,5 +79,16 @@ def test_metadata_names_are_correct(artifacts):
         ep_name = next(n for n in z.namelist() if n.endswith("entry_points.txt"))
         ep = z.read(ep_name).decode()
     assert "Name: sacs" in metadata
-    assert "Version: 0.1.0" in metadata
+    assert f"Version: {sacs.__version__}" in metadata
     assert "sacs = sacs.cli:main" in ep
+
+
+def test_console_entry_is_argless():
+    """Regression: ``sacs`` script calls main() with no arguments."""
+    from sacs import cli
+
+    assert callable(cli.main)
+    import inspect
+
+    sig = inspect.signature(cli.main)
+    assert not sig.parameters or all(p.default is not inspect.Parameter.empty for p in sig.parameters.values())

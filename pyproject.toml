@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "sacs"
-version = "0.1.0"
+version = "0.1.1"
 description = "SACS - Smart Academic Coordination System: a real-time multi-tenant school coordination platform with a one-command live demo."
 readme = "README.md"
 requires-python = ">=3.11"

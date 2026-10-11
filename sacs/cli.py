@@ -45,8 +45,16 @@ def _console(ctx: typer.Context) -> Console:
     return ctx.obj if hasattr(ctx, "obj") and ctx.obj else Console()
 
 
+def main() -> None:
+    """Console-script entry point: dispatch the Typer application."""
+    app()
+
+
 @app.callback()
-def main(ctx: typer.Context, no_color: bool = typer.Option(False, "--no-color", help="Disable ANSI colors.")) -> None:
+def cli(
+    ctx: typer.Context,
+    no_color: bool = typer.Option(False, "--no-color", help="Disable ANSI colors."),
+) -> None:
     ctx.obj = Console(no_color=no_color)
 
 
@@ -788,4 +796,4 @@ def _noop_db_upgrade():  # pragma: no cover
 
 
 if __name__ == "__main__":
-    app()
+    main()

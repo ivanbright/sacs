@@ -28,9 +28,11 @@ def _run(*args, cwd=ROOT, env_extra=None):
 
 
 def test_version_subcommand():
+    import sacs
+
     r = _run("version")
     assert r.returncode == 0, r.stderr
-    assert "0.1.0" in r.stdout
+    assert sacs.__version__ in r.stdout
 
 
 def test_help_lists_demo():
