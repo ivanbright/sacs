@@ -30,6 +30,7 @@ class Perm:
     REQUEST_REVIEW = "request.review"
     REQUEST_DECIDE = "request.decide"
     REQUEST_VIEW_SCHOOL = "request.view.school"
+    REQUEST_VIEW_OWN = "request.view.own"
     BELL_VIEW = "bell.view"
     BELL_MANAGE = "bell.manage"
     AUDIT_VIEW_SCHOOL = "audit.view.school"
@@ -45,6 +46,7 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
             Perm.TIMETABLE_VIEW,
             Perm.TIMETABLE_MANAGE,
             Perm.TIMETABLE_PUBLISH,
+            Perm.REQUEST_REVIEW,
             Perm.REQUEST_DECIDE,
             Perm.REQUEST_VIEW_SCHOOL,
             Perm.BELL_VIEW,
@@ -68,6 +70,7 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
             Perm.SCHOOL_VIEW,
             Perm.TIMETABLE_VIEW,
             Perm.REQUEST_SUBMIT,
+            Perm.REQUEST_VIEW_OWN,
             Perm.BELL_VIEW,
         }
     ),

@@ -50,22 +50,35 @@ def login(payload: LoginRequest, db: OrmSession = Depends(get_db)) -> LoginRespo
         raise HTTPException(status_code=401, detail="Invalid credentials")
 
     membership = None
-    if user.is_platform_admin and not payload.school_id:
-        session, token = create_session(db, user=user, label="platform")
-    else:
-        if not payload.school_id:
-            candidates = (
-                db.query(Membership)
-                .filter(Membership.user_id == user.id, Membership.status == "active")
-                .all()
+    if payload.school_id is None and not user.is_platform_admin:
+        candidates = (
+            db.query(Membership)
+            .filter(Membership.user_id == user.id, Membership.status == "active")
+            .all()
+        )
+        if len(candidates) == 1:
+            payload.school_id = candidates[0].school_id
+        elif len(candidates) == 0:
+            # A user who has not yet accepted an invitation may sign in without a
+            # school context. This session can inspect and accept invitations but
+            # holds no school permissions until a membership exists.
+            session, token = create_session(db, user=user, label="pending")
+            db.commit()
+            return LoginResponse(
+                token=token,
+                user={"id": user.id, "display_name": user.display_name, "email": user.email, "is_demo": user.is_demo},
+                membership=None,
+                permissions=[],
+                is_platform=False,
+                session={"id": session.id, "school_id": None, "expires_at": session.expires_at.isoformat() + "Z"},
             )
-            if len(candidates) == 1:
-                payload.school_id = candidates[0].school_id
-            else:
-                raise HTTPException(
-                    status_code=400,
-                    detail="school_id is required when the account spans schools",
-                )
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail="school_id is required when the account spans schools",
+            )
+
+    if payload.school_id is not None:
         membership = (
             db.query(Membership)
             .filter(
@@ -78,6 +91,8 @@ def login(payload: LoginRequest, db: OrmSession = Depends(get_db)) -> LoginRespo
         if membership is None:
             raise HTTPException(status_code=403, detail="No active membership in this school")
         session, token = create_session(db, user=user, school_id=membership.school_id, label="school")
+    else:
+        session, token = create_session(db, user=user, label="platform")
 
     db.commit()
     perms = effective_permissions(user, membership)

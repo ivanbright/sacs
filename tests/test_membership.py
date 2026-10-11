@@ -25,13 +25,13 @@ def test_platform_invites_and_head_accepts(client, identities):
     inv = third["head_invitation_token"]
 
     r = client.post(
-        "/api/invitations/accept",
+        "/api/invitations/accept-token",
         json={"token": inv, "password": PW, "display_name": "Third Head"},
     )
     assert r.status_code == 200, r.text
 
     assert client.post(
-        "/api/invitations/accept",
+        "/api/invitations/accept-token",
         json={"token": inv, "password": PW, "display_name": "Again"},
     ).status_code == 409
 
@@ -44,7 +44,7 @@ def test_platform_invites_and_head_accepts(client, identities):
 
 def test_unknown_invitation_token(client, identities):
     r = client.post(
-        "/api/invitations/accept",
+        "/api/invitations/accept-token",
         json={"token": "definitely-not-real", "password": PW, "display_name": "X"},
     )
     assert r.status_code == 404

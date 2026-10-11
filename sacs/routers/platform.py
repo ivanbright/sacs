@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import platform as platform_mod
 import time as time_mod
+from datetime import timedelta
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, EmailStr, Field
@@ -124,7 +125,7 @@ def create_school(
                 role="school_head",
                 token_hash=hash_token(invite_token),
                 invited_by=ctx.user.id,
-                expires_at=None,
+                expires_at=utcnow() + timedelta(days=14),
             )
         )
 
@@ -158,6 +159,48 @@ def get_school(
     if school is None:
         raise HTTPException(status_code=404, detail="School not found")
     return _serialize_school(db, school, with_counts=True)
+
+
+class InviteHeadRequest(BaseModel):
+    email: EmailStr
+    expires_in_days: int = Field(default=14, ge=1, le=365)
+
+
+@router.post("/schools/{school_id}/invitations", status_code=201)
+def platform_invite_head(
+    school_id: str,
+    payload: InviteHeadRequest,
+    ctx: AuthContext = Depends(get_auth_context),
+    db: OrmSession = Depends(get_db),
+) -> dict:
+    """Platform owner invites a Director (school head) to an existing school."""
+    require_platform(ctx, db, Perm.PLATFORM_SCHOOLS_MANAGE)
+    school = db.get(School, school_id)
+    if school is None:
+        raise HTTPException(status_code=404, detail="School not found")
+    from .invitations import create_invitation, invitation_response
+
+    invitation, token = create_invitation(
+        db,
+        school=school,
+        email=payload.email,
+        role="school_head",
+        invited_by=ctx.user.id,
+        expires_in_days=payload.expires_in_days,
+    )
+    audit.record(
+        db,
+        school_id=school.id,
+        actor_user_id=ctx.user.id,
+        actor_role="platform_admin",
+        action="invitation.created",
+        summary=f"Invited {invitation.email} as school_head to '{school.name}'",
+        entity_type="invitation",
+        entity_id=invitation.id,
+        meta={"role": "school_head"},
+    )
+    db.commit()
+    return invitation_response(db, invitation, token)
 
 
 @router.post("/schools/{school_id}/suspend")

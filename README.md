@@ -50,6 +50,40 @@ All demo accounts use the password **`SacsDemo123!`**.
 
 ---
 
+## Identities and invitations
+
+The product supports three primary roles — **Admin** (platform owner), **Director**
+(`school_head`, the final academic authority) and **Teacher** — wired together by a persisted
+invitation lifecycle. The seeded demo also ships two internal demo identities (Director of
+Studies and bell monitor) used by the pre-existing workflow and to demonstrate read-only
+access; they are not part of the invitation flow.
+
+* The **Admin** provisions a school and invites its **Director**
+  (`school create "Name" newdirector@demo.sacs`, or `school invite <slug> <email>`).
+  A school stays in *provisioning* until its Director accepts.
+* A **Director** invites **Teachers** to their school (`invite <email> teacher`).
+* The recipient signs in, lists their invitations and accepts one themselves — the
+  membership is created server-side. Invitations are single-use, expire after 14 days, can be
+  revoked, and store only the SHA-256 hash of their token.
+
+Inside `sacs demo` you are always one explicit identity; commands act as that identity and the
+server still enforces every permission.
+
+```
+whoami                       # who am I, which school, which role
+session list                 # list demo identities
+session switch <email>       # act as another identity (demo only)
+invitations                  # invitations addressed to me
+accept <id>                  # accept my invitation
+help            / help session / examples
+```
+
+The two seeded candidates `newdirector@demo.sacs` and `newteacher@demo.sacs` have no
+membership yet, so the full Admin → Director → Teacher lifecycle can be demonstrated without
+adding accounts.
+
+---
+
 ## The lesson-completion workflow
 
 A teacher submits a completion request for one of their published lessons. The request then
@@ -176,6 +210,6 @@ sacs/
   events.py       connection manager, transactional outbox, dispatcher
   seed.py         idempotent demo seed (two schools, five identities)
   migrations/     Alembic baseline migration
-  routers/        platform, schools, academics, timetable, requests, bell, realtime, auth
+  routers/        platform, schools, academics, timetable, requests, invitations, bell, realtime, auth
 tests/            unit + API + isolation + scheduler + packaging tests
 ```

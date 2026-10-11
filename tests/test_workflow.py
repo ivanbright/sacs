@@ -96,13 +96,20 @@ def test_duplicate_submit_rejected(client, identities):
 def test_teacher_sees_only_own_requests(client, identities):
     sid = school_a(identities).id
     mine = _submit(client, identities, note="mine").json()["id"]
-    mine_again = client.get(
-        f"{REQ_PATH.format(sid=sid)}",
-        headers=auth_headers(identities, "teacherA"),
-    ).json()
-    assert len(mine_again) >= 1
+    resp = client.get(f"{REQ_PATH.format(sid=sid)}", headers=auth_headers(identities, "teacherA"))
+    assert resp.status_code == 200
+    mine_again = resp.json()
+    assert isinstance(mine_again, list)
+    assert mine_again, "teacher must see their own requests"
+    assert all(r.get("id") == mine for r in mine_again), "teacher must see only their own requests"
     r = client.get(
         f"{REQ_PATH.format(sid=sid)}/{mine}",
         headers=auth_headers(identities, "dosA"),
     )
     assert r.status_code == 200
+
+
+def test_bell_monitor_cannot_view_requests(client, identities):
+    sid = school_a(identities).id
+    r = client.get(f"{REQ_PATH.format(sid=sid)}", headers=auth_headers(identities, "bellA"))
+    assert r.status_code == 403

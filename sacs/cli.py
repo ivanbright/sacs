@@ -35,8 +35,21 @@ from . import __version__
 from .config import get_settings, override_settings
 from .db import configure_database, get_sessionmaker
 
-app = typer.Typer(add_completion=False, no_args_is_help=True)
-demo_app = typer.Typer(no_args_is_help=False)
+app = typer.Typer(
+    add_completion=False,
+    no_args_is_help=True,
+    rich_markup_mode="rich",
+    help=(
+        "SACS - Smart Academic Coordination System.\n\n"
+        "Run the whole multi-tenant school platform locally from your terminal:\n\n"
+        "[bold]sacs demo[/bold]   start the server, seed data, and open the live dashboard\n\n"
+        "Inside the demo type [bold]help[/bold] for commands, [bold]examples[/bold] for a "
+        "runnable Admin -> Director -> Teacher walkthrough, and [bold]whoami[/bold] to see the "
+        "identity you are acting as. Other commands: [bold]check[/bold], [bold]serve[/bold], "
+        "[bold]status[/bold], [bold]demo reset[/bold], [bold]demo stop[/bold], [bold]version[/bold]."
+    ),
+)
+demo_app = typer.Typer(no_args_is_help=False, help="Run or manage the local SACS demonstration.")
 app.add_typer(demo_app, name="demo", help="Run or manage the local SACS demonstration.")
 api = httpx.Client(timeout=10.0)
 
@@ -60,6 +73,7 @@ def cli(
 
 @app.command("version")
 def version_cmd(ctx: typer.Context) -> None:
+    """Show the installed SACS version."""
     console = _console(ctx)
     console.print(f"sacs [bold]{__version__}[/bold] (Smart Academic Coordination System)")
 
@@ -158,6 +172,7 @@ def demo(ctx: typer.Context) -> None:
 
 @demo_app.command("reset")
 def demo_reset(ctx: typer.Context, force: bool = typer.Option(False, "--force", help="Skip the confirmation prompt.")) -> None:
+    """Destroy ONLY the local demonstration database (requires confirmation)."""
     console = _console(ctx)
     settings = get_settings()
     if not force:
@@ -186,6 +201,7 @@ def demo_reset(ctx: typer.Context, force: bool = typer.Option(False, "--force", 
 
 @demo_app.command("stop")
 def demo_stop(ctx: typer.Context) -> None:
+    """Stop a demonstration running in another terminal."""
     console = _console(ctx)
     settings = get_settings()
     if not settings.runtime_file.exists():
@@ -281,34 +297,93 @@ def _write_runtime(runtime: dict, extra: dict) -> None:
 # --------------------------------------------------------------------------- #
 
 class DemoSession:
-    """Five authenticated identities over one shared service."""
+    """Authenticated identities over one shared service.
 
-    def __init__(self, base: str, env: dict):
+    Each identity holds its own server session token. The *current* identity is
+    explicit and never changes silently; workflow commands act as the current
+    identity and the server rejects them when that identity lacks permission.
+    """
+
+    def __init__(self, base: str, env: dict, console: Console):
         self.base = base
-        self.tokens: dict[str, str] = {}
         self.env = env
+        self.console = console
+        self.tokens: dict[str, str] = {}
+        self.details: dict[str, dict] = {}
+        self.current: str = "platform"
         self.lesson_list: list[dict] = []
-        self.request_index: dict[str, int] = {}
         self.request_list: list[dict] = []
 
-    def auth(self, role: str, email: str, password: str = "SacsDemo123!", school_slug: str | None = None) -> None:
+    def auth(
+        self, key: str, email: str, password: str = "SacsDemo123!", school_slug: str | None = None
+    ) -> dict:
         sid = None
         if school_slug:
             s = next((x for x in self.env["schools"] if x["school"].slug == school_slug), None)
             sid = s["school"].id if s else None
-        self.tokens[role] = _login(self.base, email, password, sid)
+        return self.login(key, email, password, sid)
 
-    def _h(self, role: str, path: str, method="GET", **kwargs):
-        headers = {"Authorization": f"Bearer {self.tokens[role]}"}
-        fn = getattr(api, method.lower())
-        resp = fn(f"{self.base}{path}", headers=headers, **kwargs)
-        return resp
+    def login(
+        self, key: str, email: str, password: str = "SacsDemo123!", school_id: str | None = None
+    ) -> dict:
+        resp = api.post(
+            f"{self.base}/api/auth/login",
+            json={"email": email, "password": password, "school_id": school_id},
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        self.tokens[key] = data["token"]
+        self.details[key] = data
+        return data
 
-    def j(self, role, path, **kwargs):
-        r = self._h(role, path, **kwargs)
+    def switch(self, email: str, school_id: str | None = None) -> dict:
+        email = email.strip().lower()
+        data = self.login(email, email, school_id=school_id)
+        self.current = email
+        return data
+
+    def _h(self, key: str, path: str, method="GET", **kwargs):
+        headers = {"Authorization": f"Bearer {self.tokens[key]}"}
+        return api.request(method, f"{self.base}{path}", headers=headers, **kwargs)
+
+    def j(self, key, path, **kwargs):
+        r = self._h(key, path, **kwargs)
         if r.status_code >= 400:
-            raise RuntimeError(f"{r.status_code} {r.json().get('detail', r.text)}")
+            try:
+                detail = r.json().get("detail", r.text)
+            except Exception:  # noqa: BLE001
+                detail = r.text
+            raise RuntimeError(f"{r.status_code} {detail}")
         return r.json()
+
+    # -- act as the current identity -----------------------------------------
+    def cur(self, path, **kwargs):
+        return self.j(self.current, path, **kwargs)
+
+    def cur_h(self, path, method="GET", **kwargs):
+        return self._h(self.current, path, method=method, **kwargs)
+
+    def whoami(self) -> dict:
+        return self.details.get(self.current, {})
+
+    def _slug(self, school_id: str | None) -> str:
+        for s in self.env.get("schools", []):
+            if s["school"].id == school_id:
+                return s["school"].slug
+        return "?"
+
+    def prompt(self) -> str:
+        email = self.current
+        d = self.details.get(email) or {}
+        mem = d.get("membership")
+        if self.current == "platform" or d.get("is_platform"):
+            inner = "admin"
+        elif mem:
+            inner = f"{mem.get('role')}:{email}/{self._slug(mem.get('school_id'))}"
+        else:
+            inner = f"{email}:no-school"
+        return f"sacs[{inner}]> "
+
 
 
 def run_demo(console: Console) -> None:
@@ -328,7 +403,7 @@ def run_demo(console: Console) -> None:
     db = factory()
     school_a = next(s for s in env["schools"] if s["school"].slug == "northstar-academy")
 
-    session = DemoSession(runtime["url"], env)
+    session = DemoSession(runtime["url"], env, console)
     session.auth("platform", seed_mod.PLATFORM_EMAIL)
     session.auth("head", school_a["head_user"].email, school_slug=school_a["school"].slug)
     session.auth("dos", school_a["dos_user"].email, school_slug=school_a["school"].slug)
@@ -405,11 +480,12 @@ def _welcome(console: Console, runtime: dict, school_a) -> None:
 def _loop(console: Console, s: DemoSession) -> None:
     while True:
         try:
-            _dashboard(console, s)
+            if s.console.is_terminal:
+                _dashboard(console, s)
         except Exception as exc:  # noqa: BLE001
             console.print(f"[red]Dashboard error: {exc}[/red]")
         try:
-            cmd = input("[bold cyan]sacs>[/bold cyan] ").strip()
+            cmd = input(s.prompt()).strip()
         except EOFError:
             break
         if not cmd:
@@ -434,21 +510,46 @@ def _dashboard(console: Console, s: DemoSession) -> None:
     console.print(_dashboard_layout(s), new_line_start=False)
 
 
+def _is_error(data) -> bool:
+    return isinstance(data, dict) and "__error__" in data
+
+
+def _err_text(data) -> str:
+    return data.get("__error__", "unavailable") if isinstance(data, dict) else "unavailable"
+
+
+def _error_panel(title: str, data) -> Panel:
+    return Panel(
+        Text(f"No access or unavailable:\n{_err_text(data)}", style="yellow"),
+        title=f"[bold]{title}[/bold]",
+        border_style="yellow",
+    )
+
+
+def _fetch(s: DemoSession, key: str, path: str):
+    try:
+        return s.j(key, path)
+    except Exception as exc:  # noqa: BLE001 - a single failing panel must not blank the dashboard
+        return {"__error__": str(exc)}
+
+
 def _dashboard_layout(s: DemoSession) -> Layout:
-    platform = s.j("platform", "/api/platform/schools")
-    health = s.j("platform", "/api/health")
     school_id = s.env["schools"][0]["school"].id
-    school_overview = s.j("head", f"/api/schools/{school_id}/overview")
-    requests = s.j("dos", f"/api/schools/{school_id}/requests")
-    teacher_reqs = s.j("teacher", f"/api/schools/{school_id}/requests")
-    bell = s.j("bell", f"/api/schools/{school_id}/bell/events")
+    platform = _fetch(s, "platform", "/api/platform/schools")
+    health = _fetch(s, "platform", "/api/platform/health")
+    school_overview = _fetch(s, "head", f"/api/schools/{school_id}/overview")
+    requests = _fetch(s, "dos", f"/api/schools/{school_id}/requests")
+    teacher_reqs = _fetch(s, "teacher", f"/api/schools/{school_id}/requests")
+    bell = _fetch(s, "bell", f"/api/schools/{school_id}/bell/events")
 
     layout = Layout(name="root")
-    layout.split(
-        Layout(name="header", size=3),
-        Layout(name="body", ratio=1),
+    layout.split(Layout(name="header", size=3), Layout(name="body", ratio=1))
+    layout["header"].update(
+        Text(
+            f"SACS - one shared system - acting as {s.current} - {s.base}",
+            style="bold cyan",
+        )
     )
-    layout["header"].update(Text(f"SACS workspaces - one shared system - {s.base}", style="bold cyan"))
 
     top = Layout()
     mid = Layout()
@@ -458,35 +559,42 @@ def _dashboard_layout(s: DemoSession) -> Layout:
     mid.split_row(Layout(name="head"), Layout(name="dos"))
     btm.split_row(Layout(name="teacher"), Layout(name="bell"))
 
-    layout["platform"].update(_platform_panel(health, platform))
+    layout["platform"].update(_platform_panel(health))
     layout["tenants"].update(_schools_panel(platform))
-    layout["dos"].update(_queue_panel("DOS - Incoming requests", requests, "dos"))
-    layout["teacher"].update(_queue_panel("Teacher - My requests", teacher_reqs, "teacher"))
+    layout["dos"].update(_queue_panel("Review queue (Director)", requests))
+    layout["teacher"].update(_queue_panel("Teacher - My requests", teacher_reqs))
     layout["head"].update(_head_panel(school_overview, requests))
     layout["bell"].update(_bell_panel(bell))
     return layout
 
 
-def _platform_panel(health: dict, _schools) -> Panel:
+def _platform_panel(health) -> Panel:
+    if _is_error(health):
+        return _error_panel("1. Platform Owner", health)
     table = Table(show_header=False, box=None)
     table.add_column("")
     table.add_column("")
-    table.add_row("Scheduler", health["scheduler"]["clock"])
-    table.add_row("DB", health["database"])
-    table.add_row("Version", f"sacs {health['version']}")
+    table.add_row("Scheduler", (health.get("scheduler") or {}).get("clock", "?"))
+    table.add_row("DB", health.get("database", "?"))
+    table.add_row("Version", f"sacs {health.get('version', '?')}")
     return Panel(table, title="[bold]1. Platform Owner[/bold]", border_style="cyan")
 
 
-def _schools_panel(schools: list[dict]) -> Panel:
+def _schools_panel(schools) -> Panel:
+    if _is_error(schools) or not isinstance(schools, list):
+        return _error_panel("Tenants", schools)
     table = Table(box=box.SIMPLE)
     table.add_column("School")
     table.add_column("Status")
     for school in schools:
-        table.add_row(school["name"], f"[{ 'yellow' if school['status']=='suspended' else 'green' }]{school['status']}[/]")
+        color = "yellow" if school["status"] == "suspended" else "green"
+        table.add_row(school["name"], f"[{color}]{school['status']}[/]")
     return Panel(table, title="[bold]Tenants[/bold]")
 
 
-def _queue_panel(title: str, requests: list[dict], kind: str) -> Panel:
+def _queue_panel(title: str, requests) -> Panel:
+    if _is_error(requests) or not isinstance(requests, list):
+        return _error_panel(title, requests)
     table = Table(box=box.SIMPLE, show_lines=False)
     table.add_column("#")
     table.add_column("Subject")
@@ -503,21 +611,27 @@ def _queue_panel(title: str, requests: list[dict], kind: str) -> Panel:
     return Panel(table, title=f"[bold]{title}[/bold]")
 
 
-def _head_panel(overview: dict, requests: list[dict]) -> Panel:
-    pending = [r for r in requests if r["state"] == "forwarded_to_head"]
+def _head_panel(overview, requests) -> Panel:
+    if _is_error(overview):
+        return _error_panel("2. Director", overview)
+    pending = 0
+    if isinstance(requests, list):
+        pending = len([r for r in requests if r["state"] == "forwarded_to_head"])
     text = Text()
-    text.append(f"Pending requests for final decision: {len(pending)}", style="yellow")
+    text.append(f"Awaiting final decision: {pending}", style="yellow")
     text.append(f"\nLessons today: {overview.get('lessons_today', 0)}")
     text.append(f"\nTimetable entries: {overview.get('timetable_entries', 0)}")
-    return Panel(text, title="[bold]2. School Head[/bold]", border_style="magenta")
+    return Panel(text, title="[bold]2. Director[/bold]", border_style="magenta")
 
 
-def _bell_panel(bell: dict) -> Panel:
+def _bell_panel(bell) -> Panel:
+    if _is_error(bell):
+        return _error_panel("5. Bell & Schedule Monitor", bell)
     table = Table(box=box.SIMPLE)
     table.add_column("Event")
     table.add_column("Scheduled")
     table.add_column("Outcome")
-    for e in bell["events"][:8]:
+    for e in bell.get("events", [])[:8]:
         color = {"fired": "green", "missed": "red", "skipped": "yellow"}.get(e["outcome"], "white")
         table.add_row(e["label"], (e["scheduled_at"] or "?")[:19], f"[{color}]{e['outcome']}[/{color}]")
     next_event = _next_bell(bell)
@@ -559,7 +673,8 @@ def _state(state: str) -> str:
         "rejected": "red",
         "returned_for_correction": "orange1",
     }
-    return f"[{' ' + colors.get(state, 'white')}]{state}[/{colors.get(state, 'white')}]"
+    color = colors.get(state, "white")
+    return f"[{color}]{state}[/{color}]"
 
 
 # --------------------------------------------------------------------------- #
@@ -567,9 +682,20 @@ def _state(state: str) -> str:
 # --------------------------------------------------------------------------- #
 
 def _handle(console: Console, s: DemoSession, verb: str, args: list[str]) -> None:
-    sid = s.env["schools"][0]["school"].id
     if verb == "help":
-        _help(console)
+        _help(console, s, args)
+    elif verb == "examples":
+        _examples(console)
+    elif verb in ("whoami", "status", "context"):
+        _whoami(console, s)
+    elif verb in ("session", "switch", "su"):
+        _session_cmd(console, s, args)
+    elif verb == "invite":
+        _invite(console, s, args)
+    elif verb in ("invitations", "inbox"):
+        _invitations(console, s)
+    elif verb == "accept":
+        _accept(console, s, args)
     elif verb == "watch":
         _watch(console, s, int(args[0]) if args else 10)
     elif verb == "accounts":
@@ -586,36 +712,254 @@ def _handle(console: Console, s: DemoSession, verb: str, args: list[str]) -> Non
         _bell_cmd(console, s, args)
     elif verb == "school":
         _school_cmd(console, s, args)
+    elif verb == "home":
+        _session_cmd(console, s, ["switch", "platform"])
     else:
-        console.print(f"Unknown command: {verb}  (try [bold]help[/bold])")
+        console.print(
+            f"Unknown command: [bold]{verb}[/bold]. "
+            "Try [bold]help[/bold], [bold]examples[/bold] or [bold]whoami[/bold]."
+        )
 
 
-def _help(console: Console) -> None:
-    table = Table(box=box.SIMPLE_HEAVY, title="SACS demo commands")
-    table.add_column("Command")
-    table.add_column("Meaning")
-    commands = [
-        ("lessons", "List the teacher's assigned published lessons"),
-        ("submit <n> [note]", "Submit a lesson-completion request (as Teacher)"),
-        ("requests", "List all requests for the school (DOS/Head view)"),
-        ("review <n>", "DOS takes a request under review"),
-        ("forward <n> [reason]", "DOS forwards a reviewed request to the head"),
-        ("return <n> <reason>", "DOS returns a request for correction"),
-        ("approve <n> [reason]", "School Head final approval"),
-        ("reject <n> <reason>", "School Head final rejection"),
-        ("bell", "Show scheduler status and latest events"),
-        ("bell tick", "Force the scheduler to evaluate now"),
-        ("bell advance <seconds>", "Advance the test clock and fire the next event"),
-        ("bell pause | resume", "Pause / resume the school bell schedule"),
-        ("school create <name>", "Platform Owner provisions a new tenant"),
-        ("school suspend <slug> | reactivate <slug>", "Platform Owner tenant control"),
-        ("watch [seconds]", "Live auto-refreshing dashboard"),
-        ("accounts", "Show demo identities"),
-        ("quit", "Stop the demonstration"),
-    ]
-    for c, m in commands:
-        table.add_row(f"[bold]{c}[/bold]", m)
+def _whoami(console: Console, s: DemoSession) -> None:
+    d = s.whoami()
+    if not d:
+        console.print("No active identity. Use [bold]session switch <email>[/bold].")
+        return
+    user = d.get("user", {})
+    mem = d.get("membership")
+    table = Table(box=box.SIMPLE, show_header=False)
+    table.add_column(""); table.add_column("")
+    table.add_row("Email", user.get("email", "?"))
+    table.add_row("Name", user.get("display_name", "?"))
+    table.add_row("Kind", "Platform administrator" if d.get("is_platform") else "School member")
+    if mem:
+        table.add_row("School", f"{mem.get('school_name')}")
+        table.add_row("Role", mem.get("role"))
+        table.add_row("Membership", mem.get("status"))
+    else:
+        table.add_row("School", "- (accept an invitation to join one)")
+    console.print(Panel(table, title="[bold]Current identity[/bold]", border_style="cyan"))
+
+
+def _session_cmd(console: Console, s: DemoSession, args: list[str]) -> None:
+    action = (args[0].lower() if args else "list")
+    if action in ("list", "ls"):
+        table = Table(title="Demo identities", box=box.SIMPLE_HEAVY)
+        table.add_column("Email"); table.add_column("Role"); table.add_column("School")
+        for key, d in s.details.items():
+            u = d.get("user", {})
+            mem = d.get("membership")
+            table.add_row(
+                ("[bold]" + u.get("email", key) + "[/bold]") if key == s.current else u.get("email", key),
+                "admin" if d.get("is_platform") else (mem or {}).get("role", "no school"),
+                (mem or {}).get("school_name", "-"),
+            )
+        console.print(table)
+        console.print("Switch with [bold]session switch <email>[/bold] (demo only, password is shared).")
+        return
+    if action in ("switch", "su"):
+        if len(args) < 2:
+            raise RuntimeError("session switch <email>  (see `session list`)")
+        email = args[1]
+        if email == "platform":
+            key = next((k for k, d in s.details.items() if d.get("is_platform")), None)
+            if key is None:
+                raise RuntimeError("No platform identity is signed in.")
+            s.current = key
+            _whoami(console, s)
+            return
+        d = s.switch(email)
+        console.print(
+            f"[green]Now acting as[/green] {email}"
+            + ("" if d.get("membership") else "  [yellow](no school membership yet - check `invitations`)[/yellow]")
+        )
+        return
+    raise RuntimeError("Usage: session list | session switch <email>")
+
+
+def _invitations(console: Console, s: DemoSession) -> None:
+    rows = s.cur_h("/api/invitations/mine")
+    if rows.status_code >= 400:
+        raise RuntimeError(f"{rows.status_code} {rows.json().get('detail')}")
+    items = rows.json()
+    if not items:
+        console.print("No invitations addressed to " + s.current + ".")
+        return
+    table = Table(title=f"Invitations for {s.current}", box=box.SIMPLE_HEAVY)
+    table.add_column("id")
+    table.add_column("School")
+    table.add_column("Role")
+    table.add_column("Status")
+    table.add_column("Expires")
+    for i in items:
+        table.add_row(i["id"][:8], i.get("school_name", "?"), i.get("role", "?"), i["status"], (i.get("expires_at") or "-")[:19])
     console.print(table)
+    pending = [i for i in items if i["status"] == "pending"]
+    if pending:
+        console.print(f"Accept with [bold]accept {pending[0]['id']}[/bold].")
+
+
+def _accept(console: Console, s: DemoSession, args: list[str]) -> None:
+    target = args[0] if args else None
+    if target is None:
+        rows = s.cur_h("/api/invitations/mine").json()
+        pending = [i for i in rows if i["status"] == "pending"]
+        if not pending:
+            raise RuntimeError("You have no pending invitations.")
+        target = pending[0]["id"]
+    # allow a short (8-char) reference
+    rows = s.cur_h("/api/invitations/mine").json()
+    if len(target) < 36:
+        matches = [i for i in rows if i["id"].startswith(target)]
+        if len(matches) == 1:
+            target = matches[0]["id"]
+        elif not matches:
+            raise RuntimeError(f"No invitation matches '{target}'. Use `invitations` to list them.")
+    r = s.cur_h("/api/invitations/accept", method="POST", json={"invitation_id": target})
+    if r.status_code >= 400:
+        raise RuntimeError(f"{r.status_code} {r.json().get('detail', r.text)}")
+    payload = r.json()
+    console.print(f"[green]Invitation accepted.[/green] Joined {payload.get('school_id')} as {payload.get('role')}.")
+    # refresh the identity so the new membership context is active
+    s.switch(s.current)
+    _whoami(console, s)
+
+
+def _invite(console: Console, s: DemoSession, args: list[str]) -> None:
+    if s.current == "platform":
+        raise RuntimeError(
+            "As platform owner use `school create <name>` (optionally inviting a head), "
+            "or `school` to list tenants."
+        )
+    d = s.whoami()
+    mem = d.get("membership")
+    if not mem:
+        raise RuntimeError("You are not a member of a school yet. Accept an invitation first.")
+    email = args[0] if args else input("Recipient email: ").strip()
+    role = args[1] if len(args) > 1 else (input("Role [teacher/dos] (default teacher): ").strip() or "teacher")
+    sid = mem["school_id"]
+    r = s.cur_h(f"/api/schools/{sid}/invitations", method="POST", json={"email": email, "role": role})
+    if r.status_code >= 400:
+        raise RuntimeError(f"{r.status_code} {r.json().get('detail', r.text)}")
+    inv = r.json()
+    table = Table(box=box.SIMPLE, show_header=False)
+    table.add_column(""); table.add_column("")
+    table.add_row("Invitation", inv["id"][:8])
+    table.add_row("Recipient", inv["email"])
+    table.add_row("Role", inv.get("role_label", inv["role"]))
+    table.add_row("School", inv.get("school_name", ""))
+    table.add_row("Expires", (inv.get("expires_at") or "")[:19])
+    table.add_row("Reference", inv.get("accept_uri", ""))
+    console.print(Panel(table, title="[bold]Invitation created[/bold]", border_style="green"))
+    console.print(
+        "Next: the recipient runs [bold]session switch " + inv["email"] + "[/bold], then "
+        "[bold]invitations[/bold] and [bold]accept " + inv["id"][:8] + "[/bold]."
+    )
+
+
+def _examples(console: Console) -> None:
+    examples = (
+        "[bold]Explore[/bold]\n"
+        "  help                      contextual help\n"
+        "  whoami                    show the active identity and school\n"
+        "  session list              list demo identities\n"
+        "  session switch teacher.northstar@demo.sacs\n\n"
+        "[bold]Admin -> Director -> Teacher invitation lifecycle[/bold]\n"
+        "  session switch platform\n"
+        "  school create \"Beta Academy\" newdirector@demo.sacs\n"
+        "  session switch newdirector@demo.sacs\n"
+        "  invitations ; accept <id>\n"
+        "  invite newteacher@demo.sacs teacher\n"
+        "  session switch newteacher@demo.sacs\n"
+        "  invitations ; accept <id>\n\n"
+        "[bold]Lesson completion workflow[/bold]\n"
+        "  session switch teacher.northstar@demo.sacs\n"
+        "  lessons ; submit 1 \"taught as planned\"\n"
+        "  session switch head.northstar@demo.sacs\n"
+        "  requests ; review 1 ; forward 1 ; approve 1\n\n"
+        "[bold]Bell scheduler[/bold]\n"
+        "  bell ; bell advance 600 ; bell"
+    )
+    console.print(Panel(examples, title="[bold]SACS examples[/bold]", border_style="cyan", padding=(1, 2)))
+
+
+def _help(console: Console, s: DemoSession | None = None, args: list[str] | None = None) -> None:
+    if args:
+        _help_command(console, args[0])
+        return
+    console.print(
+        Panel(
+            Text.from_markup(
+                "SACS coordinates schools through the terminal.\n"
+                "You are always one explicit identity; commands act as that identity and the\n"
+                "server enforces every permission. Type [bold]whoami[/bold] to see where you are."
+            ),
+            title="[bold]What is SACS?[/bold]",
+            border_style="cyan",
+        )
+    )
+    groups = {
+        "Getting started & navigation": [
+            ("help [command]", "Show this help, or details for one command"),
+            ("examples", "Runnable end-to-end examples"),
+            ("whoami", "Show the active identity, school and role"),
+            ("session list", "List demo identities"),
+            ("session switch <email>", "Act as another demo identity (demo only)"),
+            ("watch [seconds]", "Live auto-refreshing dashboard"),
+        ],
+        "Schools & platform administration": [
+            ("school", "List tenants"),
+            ("school create <name> [head_email]", "Platform: provision a new school (optionally invite a Director)"),
+            ("school invite <slug> <email>", "Platform: invite a Director to an existing school"),
+            ("school suspend|reactivate <slug>", "Platform: change a school's lifecycle state"),
+        ],
+        "Invitations & memberships": [
+            ("invite <email> <role>", "Director: invite a teacher/dos"),
+            ("invitations", "List invitations addressed to you"),
+            ("accept <id>", "Accept your invitation"),
+        ],
+        "Lessons & completion requests": [
+            ("lessons", "Teacher: list assigned published lessons"),
+            ("submit <n> [note]", "Teacher: submit a completion request"),
+            ("requests", "List requests visible to you"),
+            ("review|forward|return <n> [reason]", "Director: move a request"),
+            ("approve|reject <n> [reason]", "Director: final decision"),
+        ],
+        "Bell scheduling": [
+            ("bell", "Show scheduler status and latest events"),
+            ("bell tick", "Force the scheduler to evaluate now"),
+            ("bell advance <seconds>", "Advance the test clock and fire the next event"),
+            ("bell pause|resume", "Pause/resume the school bell schedule"),
+        ],
+        "Demo state & troubleshooting": [
+            ("accounts", "Show demo identities and credentials"),
+            ("quit", "Stop the demonstration"),
+        ],
+    }
+    for title, rows in groups.items():
+        table = Table(title=title, box=box.SIMPLE, show_header=False)
+        table.add_column("Command"); table.add_column("Meaning")
+        for c, m in rows:
+            table.add_row(f"[bold]{c}[/bold]", m)
+        console.print(table)
+    console.print("Add [bold]--help[/bold] to any top-level command for syntax. Try [bold]examples[/bold].")
+
+
+def _help_command(console: Console, name: str) -> None:
+    docs = {
+        "session": ("session switch <email>", "Demo-only identity switching. Changes which identity subsequent commands act as; never silently."),
+        "invite": ("invite <email> <role>", "Director invites a person to the current school. Role is teacher (or dos). Creates a persisted invitation the recipient accepts themselves."),
+        "accept": ("accept <id>", "Accept an invitation addressed to your email. Establishes the membership server-side."),
+        "school": ("school create <name> [head_email] | school invite <slug> <email> | school suspend|reactivate <slug>", "Platform tenant management. Creating a school places it in provisioning until an invited Director accepts, which activates it."),
+        "submit": ("submit <n> [note]", "Teacher submits a completion request for the nth lesson shown by `lessons`."),
+        "requests": ("requests", "Lists requests you may see: your own as a teacher, the school queue as a director."),
+    }
+    if name not in docs:
+        console.print(f"No detailed help for '{name}'. Try [bold]help[/bold].")
+        return
+    syntax, meaning = docs[name]
+    console.print(Panel(meaning, title=f"[bold]{syntax}[/bold]", border_style="cyan"))
 
 
 def _accounts(console: Console, s: DemoSession) -> None:
@@ -624,15 +968,17 @@ def _accounts(console: Console, s: DemoSession) -> None:
 
 def _lessons(console: Console, s: DemoSession) -> None:
     sid = s.env["schools"][0]["school"].id
-    lessons = s.j("teacher", f"/api/schools/{sid}/timetable/lessons?date_from=" + _today())
+    r = s.cur_h(f"/api/schools/{sid}/timetable/lessons?date_from=" + _today())
+    if r.status_code >= 400:
+        raise RuntimeError(
+            f"{r.status_code} {r.json().get('detail')}  -  switch to a teacher, e.g. "
+            "`session switch teacher.northstar@demo.sacs`"
+        )
+    lessons = r.json()
     s.lesson_list = lessons
-    table = Table(title="Assigned lessons (Teacher workspace)", box=box.SIMPLE_HEAVY)
-    table.add_column("n")
-    table.add_column("Date")
-    table.add_column("Time")
-    table.add_column("Subject")
-    table.add_column("Class")
-    table.add_column("Room")
+    table = Table(title=f"Assigned lessons ({s.current})", box=box.SIMPLE_HEAVY)
+    table.add_column("n"); table.add_column("Date"); table.add_column("Time")
+    table.add_column("Subject"); table.add_column("Class"); table.add_column("Room")
     for i, lesson in enumerate(lessons, 1):
         table.add_row(str(i), lesson["date"], lesson["start"][11:19], lesson["subject"], lesson["class"], lesson["classroom"] or "-")
     console.print(table)
@@ -646,29 +992,34 @@ def _submit(console: Console, s: DemoSession, args: list[str]) -> None:
     idx = int(args[0]) if args else 1
     note = " ".join(args[1:]) or "Lesson completed as scheduled"
     lesson = s.lesson_list[idx - 1]
-    r = s._h("teacher", f"/api/schools/{s.env['schools'][0]['school'].id}/requests", method="POST", json={"lesson_session_id": lesson["id"], "note": note})
-    console.print(f"Submitted request -> [bold]{r.json()['state']}[/bold] (id {r.json()['id'][:8]})")
+    r = s.cur_h(f"/api/schools/{s.env['schools'][0]['school'].id}/requests", method="POST", json={"lesson_session_id": lesson["id"], "note": note})
+    if r.status_code >= 400:
+        raise RuntimeError(f"{r.status_code} {r.json().get('detail', r.text)}")
+    body = r.json()
+    console.print(f"Submitted request -> [bold]{body['state']}[/bold] (id {body['id'][:8]})")
 
 
 def _requests(console: Console, s: DemoSession) -> None:
     sid = s.env["schools"][0]["school"].id
-    reqs = s.j("dos", f"/api/schools/{sid}/requests")
+    r = s.cur_h(f"/api/schools/{sid}/requests")
+    if r.status_code >= 400:
+        raise RuntimeError(f"{r.status_code} {r.json().get('detail')}")
+    reqs = r.json()
     s.request_list = reqs
-    table = Table(title="Requests (school view)", box=box.SIMPLE_HEAVY)
-    table.add_column("n")
-    table.add_column("id")
-    table.add_column("Subject/Date")
-    table.add_column("State")
-    table.add_column("Updated")
-    for i, r in enumerate(reqs, 1):
-        lesson = r.get("lesson") or {}
-        table.add_row(str(i), r["id"][:8], f"{lesson.get('date')} {lesson.get('start', '')[:16]}", _state(r["state"]), r["updated_at"][:19])
+    table = Table(title=f"Requests visible to {s.current}", box=box.SIMPLE_HEAVY)
+    table.add_column("n"); table.add_column("id"); table.add_column("Subject/Date")
+    table.add_column("State"); table.add_column("Updated")
+    for i, req in enumerate(reqs, 1):
+        lesson = req.get("lesson") or {}
+        table.add_row(str(i), req["id"][:8], f"{lesson.get('date')} {lesson.get('start', '')[:16]}", _state(req["state"]), req["updated_at"][:19])
     console.print(table)
 
 
 def _acts(console: Console, s: DemoSession, verb: str, args: list[str]) -> None:
     if not s.request_list:
         _requests(console, s)
+    if not s.request_list:
+        raise RuntimeError("No requests to act on.")
     idx = int(args[0]) if args else 1
     req = s.request_list[idx - 1]
     body = {"action": verb}
@@ -678,10 +1029,10 @@ def _acts(console: Console, s: DemoSession, verb: str, args: list[str]) -> None:
         if len(args) < 2:
             raise RuntimeError(f"`{verb}` requires a reason")
         body["reason"] = " ".join(args[1:])
-    role = {"approve": "head", "reject": "head", "review": "dos", "forward": "dos", "return": "dos"}[verb]
-    r = s._h(role, f"/api/schools/{s.env['schools'][0]['school'].id}/requests/{req['id']}/transition", method="POST", json=body)
-    resp = r.json() if r.status_code == 200 else {"detail": r.json().get("detail")}
-    console.print(f"[bold]{verb}[/bold] {req['id'][:8]} -> {resp.get('state', resp.get('detail'))}")
+    r = s.cur_h(f"/api/schools/{s.env['schools'][0]['school'].id}/requests/{req['id']}/transition", method="POST", json=body)
+    if r.status_code >= 400:
+        raise RuntimeError(f"{r.status_code} {r.json().get('detail', r.text)}")
+    console.print(f"[bold]{verb}[/bold] {req['id'][:8]} -> {r.json()['state']}")
 
 
 def _bell_cmd(console: Console, s: DemoSession, args: list[str]) -> None:
@@ -713,24 +1064,57 @@ def _bell_cmd(console: Console, s: DemoSession, args: list[str]) -> None:
 
 
 def _school_cmd(console: Console, s: DemoSession, args: list[str]) -> None:
+    if s.current != "platform" and not s.whoami().get("is_platform"):
+        raise RuntimeError("Tenant administration requires the platform owner. Try `session switch platform`.")
     action = args[0].lower() if args else "list"
     if action == "create":
-        name = " ".join(args[1:])
+        name = args[1] if len(args) > 1 else input("New school name: ").strip()
         if not name:
-            raise RuntimeError("school create <name>")
-        r = s._h("platform", "/api/platform/schools", method="POST", json={"name": name, "timezone": "UTC"})
+            raise RuntimeError("school create <name> [head_email]")
+        head_email = args[2] if len(args) > 2 else None
+        body = {"name": name, "timezone": "UTC"}
+        if head_email:
+            body["head_email"] = head_email
+        r = s.cur_h("/api/platform/schools", method="POST", json=body)
+        if r.status_code >= 400:
+            raise RuntimeError(f"{r.status_code} {r.json().get('detail', r.text)}")
         payload = r.json()
-        if r.status_code == 201 and payload.get("status") == "provisioning":
-            console.print(f"[yellow]Provisioned {name} (slug {payload['slug']}). Awaiting school-head invitation acceptance.[/yellow]")
+        console.print(
+            f"[green]Provisioned[/green] {payload['name']} (slug [bold]{payload['slug']}[/bold], "
+            f"status {payload['status']})."
+        )
+        if payload.get("head_invitation_token"):
+            console.print(
+                "Head invited. The Director accepts by signing in and running "
+                f"[bold]invitations[/bold] then [bold]accept <id>[/bold]."
+            )
         else:
-            console.print(payload)
+            console.print("Invite a Director with [bold]school invite <slug> <email>[/bold].")
+    elif action == "invite":
+        if len(args) < 3:
+            raise RuntimeError("school invite <slug> <email>")
+        slug, email = args[1], args[2]
+        schools = s.j("platform", "/api/platform/schools")
+        target = next((x for x in schools if x["slug"] == slug), None)
+        if target is None:
+            raise RuntimeError(f"Unknown school slug: {slug}")
+        r = s.cur_h(f"/api/platform/schools/{target['id']}/invitations", method="POST", json={"email": email})
+        if r.status_code >= 400:
+            raise RuntimeError(f"{r.status_code} {r.json().get('detail', r.text)}")
+        inv = r.json()
+        console.print(
+            f"[green]Invited[/green] {inv['email']} as {inv.get('role_label', inv['role'])} to "
+            f"{inv.get('school_name', slug)} (invitation {inv['id'][:8]})."
+        )
     elif action in ("suspend", "reactivate"):
         slug = args[1] if len(args) > 1 else ""
         schools = s.j("platform", "/api/platform/schools")
         target = next((x for x in schools if x["slug"] == slug), None)
         if target is None:
             raise RuntimeError(f"Unknown school slug: {slug}")
-        r = s._h("platform", f"/api/platform/schools/{target['id']}/{action}", method="POST")
+        r = s.cur_h(f"/api/platform/schools/{target['id']}/{action}", method="POST")
+        if r.status_code >= 400:
+            raise RuntimeError(f"{r.status_code} {r.json().get('detail', r.text)}")
         console.print(f"{action} -> {r.json()['status']}")
     else:
         schools = s.j("platform", "/api/platform/schools")
@@ -760,6 +1144,7 @@ def _today() -> str:
 
 @app.command("status")
 def status_cmd(ctx: typer.Context) -> None:
+    """Report whether the local SACS demonstration is running."""
     console = _console(ctx)
     settings = get_settings()
     if not settings.runtime_file.exists():

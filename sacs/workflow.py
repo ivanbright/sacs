@@ -50,30 +50,36 @@ class WorkflowError(Exception):
 @dataclass(frozen=True)
 class TransitionSpec:
     action: str
-    actor_role: str
+    actor_roles: tuple[str, ...]
     permission: str
     allowed_from: tuple[str, ...]
     to: str
     requires_input: str | None = None  # field name
 
 
+# Review/forward/return can be performed by either the Director (school_head) or a
+# dedicated Director-of-Studies membership when one exists. In the initial
+# three-role model the Director exercises the whole chain from submission to
+# final decision.
+_REVIEWERS = ("dos", "school_head")
+
 # States and their allowed transitions.
 TRANSITIONS: dict[str, list[TransitionSpec]] = {
     RequestState.SUBMITTED: [
-        TransitionSpec("review", "dos", Perm.REQUEST_REVIEW, (RequestState.SUBMITTED,), RequestState.UNDER_DOS_REVIEW),
-        TransitionSpec("forward", "dos", Perm.REQUEST_REVIEW, (RequestState.SUBMITTED,), RequestState.FORWARDED_TO_HEAD),
-        TransitionSpec("return", "dos", Perm.REQUEST_REVIEW, (RequestState.SUBMITTED,), RequestState.RETURNED_FOR_CORRECTION, requires_input="reason"),
+        TransitionSpec("review", _REVIEWERS, Perm.REQUEST_REVIEW, (RequestState.SUBMITTED,), RequestState.UNDER_DOS_REVIEW),
+        TransitionSpec("forward", _REVIEWERS, Perm.REQUEST_REVIEW, (RequestState.SUBMITTED,), RequestState.FORWARDED_TO_HEAD),
+        TransitionSpec("return", _REVIEWERS, Perm.REQUEST_REVIEW, (RequestState.SUBMITTED,), RequestState.RETURNED_FOR_CORRECTION, requires_input="reason"),
     ],
     RequestState.UNDER_DOS_REVIEW: [
-        TransitionSpec("forward", "dos", Perm.REQUEST_REVIEW, (RequestState.UNDER_DOS_REVIEW,), RequestState.FORWARDED_TO_HEAD),
-        TransitionSpec("return", "dos", Perm.REQUEST_REVIEW, (RequestState.UNDER_DOS_REVIEW,), RequestState.RETURNED_FOR_CORRECTION, requires_input="reason"),
+        TransitionSpec("forward", _REVIEWERS, Perm.REQUEST_REVIEW, (RequestState.UNDER_DOS_REVIEW,), RequestState.FORWARDED_TO_HEAD),
+        TransitionSpec("return", _REVIEWERS, Perm.REQUEST_REVIEW, (RequestState.UNDER_DOS_REVIEW,), RequestState.RETURNED_FOR_CORRECTION, requires_input="reason"),
     ],
     RequestState.FORWARDED_TO_HEAD: [
-        TransitionSpec("approve", "school_head", Perm.REQUEST_DECIDE, (RequestState.FORWARDED_TO_HEAD,), RequestState.APPROVED),
-        TransitionSpec("reject", "school_head", Perm.REQUEST_DECIDE, (RequestState.FORWARDED_TO_HEAD,), RequestState.REJECTED, requires_input="reason"),
+        TransitionSpec("approve", ("school_head",), Perm.REQUEST_DECIDE, (RequestState.FORWARDED_TO_HEAD,), RequestState.APPROVED),
+        TransitionSpec("reject", ("school_head",), Perm.REQUEST_DECIDE, (RequestState.FORWARDED_TO_HEAD,), RequestState.REJECTED, requires_input="reason"),
     ],
     RequestState.RETURNED_FOR_CORRECTION: [
-        TransitionSpec("submit", "teacher", Perm.REQUEST_SUBMIT, (RequestState.RETURNED_FOR_CORRECTION,), RequestState.SUBMITTED),
+        TransitionSpec("submit", ("teacher",), Perm.REQUEST_SUBMIT, (RequestState.RETURNED_FOR_CORRECTION,), RequestState.SUBMITTED),
     ],
 }
 
@@ -97,18 +103,19 @@ def _validate_actor(request, membership: Membership, user: User, spec: Transitio
         raise WorkflowError(
             f"Role '{membership.role}' is not authorized for '{spec.action}'", 403, "forbidden"
         )
-    if membership.role != spec.actor_role:
+    if membership.role not in spec.actor_roles:
+        wanted = "' or '".join(spec.actor_roles)
         raise WorkflowError(
-            f"'{spec.action}' requires role '{spec.actor_role}', not '{membership.role}'",
+            f"'{spec.action}' requires role '{wanted}', not '{membership.role}'",
             403,
             "wrong_role",
         )
-    if request.teacher_membership_id == membership.id and spec.actor_role == "teacher":
+    if request.teacher_membership_id == membership.id and spec.actor_roles == ("teacher",):
         return
     if membership.role == "teacher" and request.teacher_membership_id != membership.id:
         raise WorkflowError("A teacher may only act on their own requests", 403, "not_own_request")
-    if spec.actor_role in ("dos", "school_head"):
-        return  # membership role matches spec.actor_role already
+    if set(spec.actor_roles) & {"dos", "school_head"}:
+        return  # membership role matches spec.actor_roles already
     raise WorkflowError("Actor cannot perform this transition", 403, "forbidden")
 
 
@@ -318,8 +325,8 @@ def _after_change(db, request, user: User, membership: Membership) -> None:
         head_id = head_user.id if head_user else None
 
     if request.state == RequestState.SUBMITTED:
-        audience = {"roles": ["dos"]}
-        ev["audience_label"] = "dos"
+        audience = {"roles": ["dos", "school_head"]}
+        ev["audience_label"] = "reviewer"
     elif request.state == RequestState.UNDER_DOS_REVIEW:
         audience = {"users": [teacher_id]} if teacher_id else {"roles": ["teacher"]}
     elif request.state == RequestState.FORWARDED_TO_HEAD:
@@ -339,12 +346,14 @@ def _after_change(db, request, user: User, membership: Membership) -> None:
     }.get(request.state, request.state)
 
     # Targeted notifications (kept lightweight; full history lives in request actions).
-    if request.state == RequestState.SUBMITTED and dos:
-        notify(
-            db, school_id=school_id, user_id=dos.id, type=f"request.{request.state}",
-            title=titles[request.state], body=f"Teacher submitted a lesson completion request.",
-            entity_type="completion_request", entity_id=request.id,
-        )
+    if request.state == RequestState.SUBMITTED:
+        for reviewer in (dos, head_user):
+            if reviewer is not None:
+                notify(
+                    db, school_id=school_id, user_id=reviewer.id, type=f"request.{request.state}",
+                    title=titles[request.state], body="A teacher submitted a lesson completion request.",
+                    entity_type="completion_request", entity_id=request.id,
+                )
     elif request.state in (RequestState.UNDER_DOS_REVIEW, RequestState.RETURNED_FOR_CORRECTION) and teacher:
         notify(
             db, school_id=school_id, user_id=teacher.id, type=f"request.{request.state}",

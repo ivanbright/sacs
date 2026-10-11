@@ -13,6 +13,7 @@ from ..deps import AuthContext, get_auth_context, require_membership
 from ..events import Topic, enqueue, notify
 from ..models import (
     CompletionRequest,
+    Invitation,
     Membership,
     MembershipStatus,
     Notification,
@@ -25,6 +26,7 @@ from ..models import (
 )
 from ..rbac import Perm
 from ..security import create_session, generate_token, hash_password, hash_token
+from .invitations import create_invitation, invitation_response
 
 router = APIRouter(prefix="/api/schools", tags=["schools"])
 
@@ -41,84 +43,9 @@ def _user_out(u: User) -> dict:
 
 
 # --------------------------------------------------------------------------- #
-# Invitation acceptance (defined secure process for establishing a school head)
+# Invitation lifecycle lives in ``routers.invitations``. School-scoped
+# invitation *creation* (Director -> Teacher) is defined in the staff section.
 # --------------------------------------------------------------------------- #
-
-accept_router = APIRouter(tags=["invitations"])
-
-
-class InvitationAcceptRequest(BaseModel):
-    token: str = Field(min_length=8)
-    password: str = Field(min_length=8)
-    display_name: str = Field(min_length=1, max_length=255)
-
-
-@accept_router.post("/api/invitations/accept")
-def accept_invitation(
-    payload: InvitationAcceptRequest,
-    db: OrmSession = Depends(get_db),
-) -> dict:
-    from ..models import Invitation
-
-    invitation = (
-        db.query(Invitation).filter(Invitation.token_hash == hash_token(payload.token)).first()
-    )
-    if invitation is None:
-        raise HTTPException(status_code=404, detail="Unknown invitation token")
-    if invitation.status == "accepted":
-        raise HTTPException(status_code=409, detail="Invitation already used")
-    if invitation.expires_at is not None and invitation.expires_at < utcnow():
-        raise HTTPException(status_code=410, detail="Invitation expired")
-
-    school = db.get(School, invitation.school_id)
-    if school is None:
-        raise HTTPException(status_code=404, detail="School not found")
-
-    existing = db.query(User).filter(User.email == invitation.email).first()
-    if existing is not None and existing.is_active:
-        user = existing
-    elif existing is not None and not existing.is_active:
-        existing.is_active = True
-        user = existing
-    else:
-        user = User(
-            email=invitation.email,
-            password_hash=hash_password(payload.password),
-            display_name=payload.display_name.strip(),
-            is_demo=school.is_demo,
-        )
-        db.add(user)
-        db.flush()
-
-    membership = (
-        db.query(Membership)
-        .filter(Membership.user_id == user.id, Membership.school_id == school.id)
-        .first()
-    )
-    if membership is None:
-        membership = Membership(
-            user_id=user.id, school_id=school.id, role=invitation.role, status=MembershipStatus.ACTIVE
-        )
-        db.add(membership)
-    else:
-        membership.role = invitation.role
-        membership.status = MembershipStatus.ACTIVE
-
-    invitation.status = "accepted"
-    invitation.accepted_at = utcnow()
-
-    if school.status == SchoolStatus.PROVISIONING:
-        school.status = SchoolStatus.ACTIVE
-        school.verified_at = utcnow()
-
-    audit.record(
-        db, school_id=school.id, actor_user_id=user.id, actor_role=invitation.role,
-        action="membership.activated", summary=f"Invitation accepted; '{user.display_name}' joined as {invitation.role}",
-        entity_type="membership", entity_id=membership.id,
-        meta={"invitation_id": invitation.id},
-    )
-    db.commit()
-    return {"ok": True, "school_id": school.id, "user_id": user.id, "membership_id": membership.id}
 
 
 # --------------------------------------------------------------------------- #
@@ -227,6 +154,121 @@ def create_staff(
 class StaffUpdateRequest(BaseModel):
     role: str | None = None
     status: str | None = None
+
+
+class InvitationCreateRequest(BaseModel):
+    email: EmailStr
+    role: str
+    expires_in_days: int = Field(default=14, ge=1, le=365)
+
+
+@router.post("/{school_id}/invitations", status_code=201)
+def create_school_invitation(
+    school_id: str,
+    payload: InvitationCreateRequest,
+    ctx: AuthContext = Depends(get_auth_context),
+    db: OrmSession = Depends(get_db),
+) -> dict:
+    """Invite a person to this school. Directors may invite teachers and
+    directors of studies; the platform owner invites school heads."""
+    membership = require_membership(ctx, db, school_id, Perm.STAFF_MANAGE)
+    if payload.role not in (Role.TEACHER, Role.DOS):
+        raise HTTPException(
+            status_code=422,
+            detail="A Director may invite 'teacher' or 'dos' memberships",
+        )
+    school = db.get(School, school_id)
+    invitation, token = create_invitation(
+        db,
+        school=school,
+        email=payload.email,
+        role=payload.role,
+        invited_by=ctx.user.id,
+        expires_in_days=payload.expires_in_days,
+    )
+    audit.record(
+        db,
+        school_id=school_id,
+        actor_user_id=ctx.user.id,
+        actor_role=membership.role,
+        action="invitation.created",
+        summary=f"Invited {invitation.email} as {payload.role}",
+        entity_type="invitation",
+        entity_id=invitation.id,
+        meta={"role": payload.role},
+    )
+    invitee = db.query(User).filter(User.email == invitation.email).first()
+    if invitee is not None:
+        notify(
+            db,
+            school_id=school_id,
+            user_id=invitee.id,
+            type="invitation.created",
+            title=f"Invitation to {school.name}",
+            body=f"You were invited as {Role.LABELS.get(payload.role, payload.role)}.",
+        )
+    enqueue(
+        db,
+        Topic.STAFF,
+        {"school_id": school_id, "audience": {"roles": ["school_head", "dos"]}, "data": {"action": "invited"}},
+    )
+    db.commit()
+    return invitation_response(db, invitation, token)
+
+
+@router.post("/{school_id}/invitations/{invitation_id}/revoke")
+def revoke_school_invitation(
+    school_id: str,
+    invitation_id: str,
+    ctx: AuthContext = Depends(get_auth_context),
+    db: OrmSession = Depends(get_db),
+) -> dict:
+    membership = require_membership(ctx, db, school_id, Perm.STAFF_MANAGE)
+    invitation = db.get(Invitation, invitation_id)
+    if invitation is None or invitation.school_id != school_id:
+        raise HTTPException(status_code=404, detail="Invitation not found")
+    if invitation.status != "pending":
+        raise HTTPException(status_code=409, detail=f"Invitation is already {invitation.status}")
+    invitation.status = "revoked"
+    audit.record(
+        db,
+        school_id=school_id,
+        actor_user_id=ctx.user.id,
+        actor_role=membership.role,
+        action="invitation.revoked",
+        summary=f"Revoked invitation for {invitation.email}",
+        entity_type="invitation",
+        entity_id=invitation.id,
+    )
+    db.commit()
+    return {"id": invitation.id, "status": invitation.status}
+
+
+@router.get("/{school_id}/invitations")
+def list_school_invitations(
+    school_id: str,
+    ctx: AuthContext = Depends(get_auth_context),
+    db: OrmSession = Depends(get_db),
+) -> list[dict]:
+    require_membership(ctx, db, school_id, Perm.STAFF_MANAGE)
+    rows = (
+        db.query(Invitation)
+        .filter(Invitation.school_id == school_id)
+        .order_by(Invitation.created_at.desc())
+        .all()
+    )
+    return [
+        {
+            "id": i.id,
+            "email": i.email,
+            "role": i.role,
+            "role_label": ROLE_NAMES.get(i.role, i.role),
+            "status": i.status,
+            "created_at": i.created_at.isoformat() + "Z",
+            "expires_at": i.expires_at.isoformat() + "Z" if i.expires_at else None,
+        }
+        for i in rows
+    ]
 
 
 @router.patch("/{school_id}/staff/{membership_id}")

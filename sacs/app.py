@@ -17,6 +17,7 @@ from .scheduler import bell_loop
 from .routers import auth as auth_router
 from .routers import academics as academics_router
 from .routers import bell as bell_router
+from .routers import invitations as invitations_router
 from .routers import platform as platform_router
 from .routers import realtime as realtime_router
 from .routers import requests as requests_router
@@ -66,7 +67,7 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
-    app.include_router(schools_router.accept_router)
+    app.include_router(invitations_router.router)
     app.include_router(auth_router.router)
     app.include_router(platform_router.router)
     app.include_router(schools_router.router)

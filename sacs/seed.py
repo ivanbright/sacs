@@ -34,6 +34,16 @@ from .security import hash_password
 DEMO_PASSWORD = "SacsDemo123!"
 PLATFORM_EMAIL = "platform@demo.sacs"
 
+# Demo identities that start with *no* school membership. They exist so the full
+# invitation lifecycle (create -> inspect -> accept) can be demonstrated without
+# inventing accounts on the fly: an Administrator invites one of these emails,
+# the tester switches to that identity, accepts, and immediately holds a real
+# school membership.
+CANDIDATE_IDENTITIES = [
+    ("newdirector@demo.sacs", "New Director (Demo)"),
+    ("newteacher@demo.sacs", "New Teacher (Demo)"),
+]
+
 SCHOOLS = [
     {
         "name": "Northstar Academy",
@@ -297,10 +307,33 @@ def seed_bell_schedule(db, school: School) -> None:
     )
 
 
+def seed_candidates(db: OrmSession) -> list[User]:
+    """Demo identities with no membership, used to demonstrate invitations."""
+    users = []
+    for email, name in CANDIDATE_IDENTITIES:
+        user = db.query(User).filter(User.email == email).first()
+        if user is None:
+            user = User(
+                email=email,
+                password_hash=hash_password(DEMO_PASSWORD),
+                display_name=name,
+                is_demo=True,
+            )
+            db.add(user)
+            db.flush()
+        users.append(user)
+    return users
+
+
 def seed_all(db: OrmSession) -> dict:
     """Idempotently create the full demonstration dataset."""
     seed_platform_admin(db)
-    result = {"platform": {"email": PLATFORM_EMAIL}, "schools": []}
+    candidates = seed_candidates(db)
+    result = {
+        "platform": {"email": PLATFORM_EMAIL},
+        "candidates": [{"email": u.email, "name": u.display_name} for u in candidates],
+        "schools": [],
+    }
     for spec in SCHOOLS:
         result["schools"].append(seed_school(db, spec))
     db.commit()

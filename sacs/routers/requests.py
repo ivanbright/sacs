@@ -8,7 +8,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session as OrmSession
 
 from ..db import get_db
-from ..deps import AuthContext, get_auth_context, require_membership
+from ..deps import AuthContext, active_membership, get_auth_context, require_membership
 from ..events import Topic, dispatch_pending
 from ..models import (
     CompletionRequest,
@@ -16,6 +16,7 @@ from ..models import (
     Membership,
     RequestAction,
     RequestState,
+    Role,
     TimetableEntry,
     TimetableStatus,
     User,
@@ -48,6 +49,17 @@ def _with_lesson(db: OrmSession, request: CompletionRequest) -> dict:
     return data
 
 
+def _view_guard(ctx: AuthContext, db: OrmSession, school_id: str) -> Membership:
+    membership = active_membership(db, ctx.user, school_id)
+    if membership is None:
+        raise HTTPException(status_code=403, detail="No active membership in this school")
+    if membership.role == Role.TEACHER:
+        permission = Perm.REQUEST_VIEW_OWN
+    else:
+        permission = Perm.REQUEST_VIEW_SCHOOL
+    return require_membership(ctx, db, school_id, permission)
+
+
 @router.get("")
 def list_requests(
     school_id: str,
@@ -55,7 +67,7 @@ def list_requests(
     ctx: AuthContext = Depends(get_auth_context),
     db: OrmSession = Depends(get_db),
 ) -> list[dict]:
-    viewed = require_membership(ctx, db, school_id, Perm.REQUEST_VIEW_SCHOOL)
+    viewed = _view_guard(ctx, db, school_id)
     q = db.query(CompletionRequest).filter(CompletionRequest.school_id == school_id)
     if viewed.role == "teacher":
         q = q.filter(CompletionRequest.teacher_membership_id == viewed.id)
@@ -139,7 +151,7 @@ def request_detail(
     ctx: AuthContext = Depends(get_auth_context),
     db: OrmSession = Depends(get_db),
 ) -> dict:
-    viewed = require_membership(ctx, db, school_id, Perm.REQUEST_VIEW_SCHOOL)
+    viewed = _view_guard(ctx, db, school_id)
     request = db.get(CompletionRequest, request_id)
     if request is None or request.school_id != school_id:
         raise HTTPException(status_code=404, detail="Request not found")
