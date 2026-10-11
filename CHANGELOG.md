@@ -4,6 +4,37 @@ All notable changes to SACS are documented in this file. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2026-10-11
+
+### Added
+- **Interactive terminal application** (`sacs start`). A single numbered-menu
+  experience for the three product roles - Platform Administrator, Director
+  (School Head) and Teacher - built on a menu *stack* so `0` always returns to the
+  immediate parent. `0. Logout` from a main menu, `0. Exit` from login; EOF and
+  Ctrl+C are treated as "back". Black background, green primary text, dark-green
+  secondary text, red errors, monospaced; automatic plain-text fallback when colour
+  is unsupported. No web/browser frontend.
+- **In-process API client** (`sacs.api_client`). The terminal drives the *same*
+  FastAPI app through Starlette's ASGI test client, so every action passes through
+  the real authentication/authorization/validation code.
+- **Terminal presentation layer** (`sacs.ui`): console, colours, menus, navigation
+  and form helpers.
+- **Persistent notification inbox** (`/api/notifications`): list, unread count,
+  open, mark one/all read - scoped strictly to the signed-in user. Invitations now
+  notify the inviter (and Platform Administrators for Director invitations) when
+  accepted.
+- **School bell scheduling**: per-schedule weekdays (`days`), period add/remove,
+  activate/deactivate, delete, manual `ring`, and `test-sound`, plus best-effort
+  audio synthesis/playback (`sacs.audio`) with a terminal-bell fallback.
+- **Timetable drafting**: entries are created as drafts; teachers never see drafts;
+  teacher/class/classroom time-slot conflicts are rejected on create and re-checked
+  before publishing. Publishing promotes drafts and materialises lesson sessions.
+- **Director timetable draft entry** flow in the terminal app.
+
+### Changed
+- Version bumped to 0.2.0. Package description corrected to reflect the
+  terminal-only product.
+
 ## [0.1.2] - 2026-10-11
 
 ### Added

@@ -18,6 +18,7 @@ from .routers import auth as auth_router
 from .routers import academics as academics_router
 from .routers import bell as bell_router
 from .routers import invitations as invitations_router
+from .routers import notifications as notifications_router
 from .routers import platform as platform_router
 from .routers import realtime as realtime_router
 from .routers import requests as requests_router
@@ -68,6 +69,7 @@ def create_app() -> FastAPI:
     )
 
     app.include_router(invitations_router.router)
+    app.include_router(notifications_router.router)
     app.include_router(auth_router.router)
     app.include_router(platform_router.router)
     app.include_router(schools_router.router)

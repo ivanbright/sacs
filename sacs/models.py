@@ -386,6 +386,10 @@ class BellSchedule(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     paused: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     periods: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
+    # Weekdays (0=Monday .. 6=Sunday) on which the schedule applies. ``None``
+    # means every day, preserving the behaviour of schedules created before the
+    # column existed.
+    days: Mapped[list | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, nullable=False)
 

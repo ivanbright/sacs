@@ -14,6 +14,8 @@ SACS_CORS_ORIGINS      Comma separated allowed origins (deployed environments).
 SACS_ENABLE_TEST_CLOCK Enable the deterministic test clock + scheduler tick API.
 SACS_SESSION_TTL_HOURS Session lifetime in hours (default ``12``).
 SACS_BELL_GRACE_SECONDS Grace window for late bell execution (default ``90``).
+SACS_BELL_AUDIO        Play the bell sound when a bell fires (default ``true``).
+SACS_BELL_SOUND        Optional path to a custom WAV bell sound.
 """
 
 from __future__ import annotations
@@ -58,6 +60,10 @@ class Settings:
     bell_grace_seconds: int = field(
         default_factory=lambda: int(os.environ.get("SACS_BELL_GRACE_SECONDS", "90"))
     )
+    bell_audio: bool = field(
+        default_factory=lambda: _as_bool(os.environ.get("SACS_BELL_AUDIO"), True)
+    )
+    bell_sound: str = field(default_factory=lambda: os.environ.get("SACS_BELL_SOUND", ""))
 
     def __post_init__(self) -> None:
         self.home = Path(self.home).expanduser()

@@ -179,6 +179,33 @@ def _activate(db: OrmSession, invitation: Invitation, *, user: User) -> dict:
         school.status = SchoolStatus.ACTIVE
         school.verified_at = utcnow()
 
+    # Notify the person who issued the invitation, and -- when a Director joins
+    # -- every Platform Administrator. This closes the onboarding loop the
+    # specification calls for without granting any approval authority.
+    if invitation.invited_by:
+        notify(
+            db,
+            school_id=school.id,
+            user_id=invitation.invited_by,
+            type="invitation.accepted",
+            title="Invitation accepted",
+            body=f"{user.display_name} accepted the invitation to join '{school.name}'.",
+            entity_type="invitation",
+            entity_id=invitation.id,
+        )
+    if invitation.role == Role.SCHOOL_HEAD:
+        for admin in db.query(User).filter(User.is_platform_admin.is_(True)).all():
+            notify(
+                db,
+                school_id=school.id,
+                user_id=admin.id,
+                type="school.director_joined",
+                title="Director joined a school",
+                body=f"{user.display_name} accepted the Director invitation for '{school.name}'.",
+                entity_type="invitation",
+                entity_id=invitation.id,
+            )
+
     audit.record(
         db,
         school_id=school.id,

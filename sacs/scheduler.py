@@ -69,6 +69,9 @@ def occurrences_for_day(schedule: BellSchedule, day):
         tz = ZoneInfo(schedule.timezone)
     except Exception:  # noqa: BLE001 - invalid timezone falls back to UTC
         tz = ZoneInfo("UTC")
+    days = getattr(schedule, "days", None)
+    if days is not None and day.weekday() not in days:
+        return
     for index, period in enumerate(schedule.periods or []):
         start = period.get("start") or "00:00"
         end = period.get("end") or "23:59"
@@ -171,6 +174,11 @@ def run_tick(session_factory) -> dict:
                 totals[outcome] += value
         db.commit()
         _last_tick = {"at": reference.isoformat() + "Z", **totals}
+        if totals[BellOutcome.FIRED] and settings.bell_audio:
+            from . import audio
+
+            if not audio.ring(background=True):
+                logger.warning("bell fired but audio could not be started")
         return dict(_last_tick)
     except Exception:  # noqa: BLE001
         db.rollback()

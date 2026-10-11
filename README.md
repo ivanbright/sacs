@@ -14,6 +14,7 @@ talks to one shared FastAPI backend exactly like a real client would.
 
 ```bash
 pip install sacs          # then:
+sacs start                # migrate, seed if empty, open the interactive terminal app
 sacs demo                 # migrate, seed, start the server, open the live dashboard
 sacs status               # show whether the demonstration is running
 sacs demo reset           # destroy ONLY the local demo database (requires confirmation)
@@ -21,6 +22,12 @@ sacs demo stop            # stop the running demonstration
 sacs check                # verify dependencies and running environment
 sacs version
 ```
+
+`sacs start` opens the interactive, numbered-menu terminal application for the three
+product roles (Platform Administrator, Director, Teacher). It talks to the shared backend
+through an in-process client, so every action is authorized by the server. `0` always
+returns to the immediate parent menu; the main menu uses `0. Logout` and login uses
+`0. Exit`.
 
 `sacs demo` is the product. It:
 
@@ -199,7 +206,11 @@ python -m build --no-isolation --outdir dist
 
 ```
 sacs/
-  cli.py          Typer CLI + the demo dashboard (five workspaces)
+  cli.py          Typer CLI (`start`, `demo`, administration commands)
+  app_menu.py     interactive terminal application (numbered-menu, all roles)
+  ui.py           terminal presentation layer (colours, menus, navigation)
+  api_client.py   in-process API client used by the terminal app
+  audio.py        bell sound synthesis + best-effort playback
   app.py          FastAPI application and lifespan tasks
   models.py       SQLAlchemy models (19 tables)
   db.py           engines, sessions, Alembic wiring
@@ -210,6 +221,6 @@ sacs/
   events.py       connection manager, transactional outbox, dispatcher
   seed.py         idempotent demo seed (two schools, five identities)
   migrations/     Alembic baseline migration
-  routers/        platform, schools, academics, timetable, requests, invitations, bell, realtime, auth
-tests/            unit + API + isolation + scheduler + packaging tests
+  routers/        platform, schools, academics, timetable, requests, invitations, bell, notifications, realtime, auth
+tests/            unit + API + isolation + scheduler + terminal + packaging tests
 ```

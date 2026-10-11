@@ -79,19 +79,62 @@ def _validate_entry(db: OrmSession, school_id: str, p: EntryCreate) -> None:
             raise HTTPException(status_code=422, detail="Unknown classroom_id in this school")
 
 
+def _overlaps(a_start: str, a_end: str, b_start: str, b_end: str) -> bool:
+    # Times are zero-padded "HH:MM", so string comparison is chronological.
+    return a_start < b_end and b_start < a_end
+
+
+def _conflicts(
+    db: OrmSession,
+    school_id: str,
+    *,
+    day_of_week: int,
+    start_time: str,
+    end_time: str,
+    teacher_membership_id: str,
+    class_id: str,
+    classroom_id: str | None,
+    exclude_id: str | None = None,
+) -> list[dict]:
+    """Return existing entries that clash on teacher, class, or classroom."""
+    rows = (
+        db.query(TimetableEntry)
+        .filter(
+            TimetableEntry.school_id == school_id,
+            TimetableEntry.day_of_week == day_of_week,
+        )
+        .all()
+    )
+    clashes = []
+    for e in rows:
+        if exclude_id is not None and e.id == exclude_id:
+            continue
+        if not _overlaps(start_time, end_time, e.start_time, e.end_time):
+            continue
+        reasons = []
+        if e.teacher_membership_id == teacher_membership_id:
+            reasons.append("teacher")
+        if e.class_id == class_id:
+            reasons.append("class")
+        if classroom_id and e.classroom_id == classroom_id:
+            reasons.append("classroom")
+        if reasons:
+            clashes.append({"id": e.id, "reasons": reasons})
+    return clashes
+
+
 @router.get("")
 def list_timetable(
     school_id: str,
     ctx: AuthContext = Depends(get_auth_context),
     db: OrmSession = Depends(get_db),
 ) -> list[dict]:
-    require_membership(ctx, db, school_id, Perm.TIMETABLE_VIEW)
-    rows = (
-        db.query(TimetableEntry)
-        .filter_by(school_id=school_id)
-        .order_by(TimetableEntry.day_of_week, TimetableEntry.start_time)
-        .all()
-    )
+    membership = require_membership(ctx, db, school_id, Perm.TIMETABLE_VIEW)
+    q = db.query(TimetableEntry).filter_by(school_id=school_id)
+    # Teachers only ever see the published timetable; drafts are a staff view.
+    if membership.role == "teacher":
+        q = q.filter(TimetableEntry.status == TimetableStatus.PUBLISHED)
+    rows = q.order_by(TimetableEntry.day_of_week, TimetableEntry.start_time).all()
     return [_serialize(db, e) for e in rows]
 
 
@@ -104,6 +147,21 @@ def create_entry(
 ) -> dict:
     require_membership(ctx, db, school_id, Perm.TIMETABLE_MANAGE)
     _validate_entry(db, school_id, payload)
+    clashes = _conflicts(
+        db,
+        school_id,
+        day_of_week=payload.day_of_week,
+        start_time=payload.start_time,
+        end_time=payload.end_time,
+        teacher_membership_id=payload.teacher_membership_id,
+        class_id=payload.class_id,
+        classroom_id=payload.classroom_id,
+    )
+    if clashes:
+        raise HTTPException(
+            status_code=409,
+            detail={"message": "Timetable conflict", "conflicts": clashes},
+        )
     row = TimetableEntry(
         school_id=school_id,
         class_id=payload.class_id,
@@ -140,6 +198,26 @@ def publish(
         .filter(TimetableEntry.school_id == school_id, TimetableEntry.status != TimetableStatus.PUBLISHED)
         .all()
     )
+    conflicts = []
+    for e in entries:
+        clashes = _conflicts(
+            db,
+            school_id,
+            day_of_week=e.day_of_week,
+            start_time=e.start_time,
+            end_time=e.end_time,
+            teacher_membership_id=e.teacher_membership_id,
+            class_id=e.class_id,
+            classroom_id=e.classroom_id,
+            exclude_id=e.id,
+        )
+        if clashes:
+            conflicts.append({"entry_id": e.id, "conflicts": clashes})
+    if conflicts:
+        raise HTTPException(
+            status_code=409,
+            detail={"message": "Timetable has conflicts and was not published", "conflicts": conflicts},
+        )
     for e in entries:
         e.status = TimetableStatus.PUBLISHED
 

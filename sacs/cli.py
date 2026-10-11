@@ -45,7 +45,8 @@ app = typer.Typer(
         "[bold]sacs demo[/bold]   start the server, seed data, and open the live dashboard\n\n"
         "Inside the demo type [bold]help[/bold] for commands, [bold]examples[/bold] for a "
         "runnable Admin -> Director -> Teacher walkthrough, and [bold]whoami[/bold] to see the "
-        "identity you are acting as. Other commands: [bold]check[/bold], [bold]serve[/bold], "
+        "identity you are acting as. Other commands: [bold]start[/bold] (interactive terminal "
+        "app), [bold]check[/bold], [bold]serve[/bold], "
         "[bold]status[/bold], [bold]demo reset[/bold], [bold]demo stop[/bold], [bold]version[/bold]."
     ),
 )
@@ -156,6 +157,32 @@ def serve(ctx: typer.Context) -> None:
     except KeyboardInterrupt:
         _stop_server(runtime)
         console.print("Stopped.")
+
+
+@app.command("start")
+def start(
+    ctx: typer.Context,
+    seed: bool = typer.Option(
+        True, "--seed/--no-seed", help="Seed demonstration data when the database is empty."
+    ),
+) -> None:
+    """Open the interactive terminal app (Administrator / Director / Teacher)."""
+    from . import seed as seed_mod
+    from .app_menu import run as run_app
+    from .models import School
+    from .ui import Console as UiConsole
+
+    console = _console(ctx)
+    _init_db(console)
+    if seed:
+        db = get_sessionmaker()()
+        try:
+            if db.query(School).count() == 0:
+                seed_mod.seed_all(db)
+                console.print("[green]Seeded demonstration data.[/green]")
+        finally:
+            db.close()
+    run_app(UiConsole())
 
 
 # --------------------------------------------------------------------------- #

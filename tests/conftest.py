@@ -2,8 +2,13 @@
 
 from __future__ import annotations
 
+import os
+
 import pytest
 from fastapi.testclient import TestClient
+
+# The bell scheduler must never emit real audio during the test run.
+os.environ.setdefault("SACS_BELL_AUDIO", "0")
 
 from sacs import seed as seed_mod
 from sacs.app import create_app
