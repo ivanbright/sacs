@@ -186,7 +186,8 @@ class TerminalApp:
                 json={"token": token, "password": password, "display_name": display_name},
             )
             c.say("Invitation accepted.")
-            self.me = self.api.me()
+            login = self.api.login(data["email"], password, data.get("school_id"))
+            self.me = login
             self._apply_identity()
             return self.main_menu()
         except ApiError as exc:

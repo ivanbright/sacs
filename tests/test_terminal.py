@@ -90,6 +90,31 @@ def test_first_login_forces_password_change(env):
     assert "Password changed" in out
 
 
+def test_accept_token_then_login_lands_in_director_menu(env):
+    from sacs.seed import PLATFORM_EMAIL
+
+    with ApiClient() as api:
+        api.login(PLATFORM_EMAIL, PASSWORD)
+        school = api.post(
+            "/api/platform/schools",
+            json={
+                "name": "Director Campus",
+                "slug": "director-campus",
+                "timezone": "UTC",
+                "head_email": "head.director@demo.sacs",
+                "head_name": "Director Head",
+            },
+        )
+        token = school["head_invitation_token"]
+
+    # 1 Accept invitation with token -> token / password / name
+    # -> auto-signed-in Director menu -> logout -> exit
+    result, out = run_app(["1", token, "DirectorPass123!", "Director Head", "0", "0"])
+    assert result == NAV_EXIT
+    assert "Invitation accepted" in out
+    assert "Director" in out
+
+
 def test_teacher_can_submit_a_lesson(env):
     teacher_email = env["schools"][0]["teacher_user"].email
     # 3 Teacher -> email/password -> 3 Submit -> 1 first lesson -> blank note -> back/out

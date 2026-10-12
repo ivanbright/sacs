@@ -4,6 +4,14 @@ All notable changes to SACS are documented in this file. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.3] - 2026-10-12
+
+### Fixed
+- **Accepting an invitation with a token failed with "Invalid or expired session".** The
+  terminal signed the recipient in automatically after acceptance (using the password they
+  just chose), instead of calling an authenticated endpoint while still logged out. This
+  also fixed the same failure when accepting from the "no school membership" menu.
+
 ## [0.2.2] - 2026-10-12
 
 ### Removed

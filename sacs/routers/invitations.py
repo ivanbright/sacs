@@ -239,6 +239,7 @@ def _activate(db: OrmSession, invitation: Invitation, *, user: User) -> dict:
         "ok": True,
         "school_id": school.id,
         "school_slug": school.slug,
+        "email": user.email,
         "user_id": user.id,
         "membership_id": membership.id,
         "role": membership.role,
