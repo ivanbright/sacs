@@ -33,32 +33,39 @@ from pathlib import Path
 
 logger = logging.getLogger("sacs.audio")
 
+_DEFAULT_RINGS = 3
+_RING_GAP_SECONDS = 1.0
 _DEFAULT_NAME = "bell.wav"
-_SAMPLE_RATE = 44_100
+_SAMPLE_RATE = 44100
 _DURATION_SECONDS = 1.6
-# A bright, bell-like triad. Distinct partials give a metallic strike.
 _PARTIALS = (880.0, 1174.66, 1567.98)
 
 
 def synthesise_wav(
     path: Path,
     *,
-    sample_rate: int = _SAMPLE_RATE,
+    rings: int = _DEFAULT_RINGS,
     duration: float = _DURATION_SECONDS,
+    gap: float = _RING_GAP_SECONDS,
+    sample_rate: int = _SAMPLE_RATE,
 ) -> Path:
-    """Write a decaying bell chime to ``path`` as 16-bit mono PCM WAV."""
+    """Write ``rings`` decaying bell chimes, separated by ``gap`` seconds, to ``path``."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    total = int(sample_rate * duration)
+    rings = max(1, int(rings))
     frames = bytearray()
-    for index in range(total):
-        t = index / sample_rate
-        envelope = math.exp(-3.5 * t)
-        strike = math.exp(-45.0 * t)
-        tone = sum(math.sin(2.0 * math.pi * freq * t) for freq in _PARTIALS) / len(_PARTIALS)
-        sample = (tone * 0.7 + strike * 0.3) * envelope
-        sample = max(-1.0, min(1.0, sample))
-        frames += struct.pack("<h", int(sample * 32767 * 0.8))
+    for i in range(rings):
+        total = int(sample_rate * duration)
+        for index in range(total):
+            t = index / sample_rate
+            envelope = math.exp(-3.5 * t)
+            strike = math.exp(-45.0 * t)
+            tone = sum(math.sin(2.0 * math.pi * freq * t) for freq in _PARTIALS) / len(_PARTIALS)
+            sample = (tone * 0.7 + strike * 0.3) * envelope
+            sample = max(-1.0, min(1.0, sample))
+            frames += struct.pack("<h", int(sample * 32767 * 0.8))
+        if i < rings - 1 and gap > 0:
+            frames += b"\x00\x00" * int(sample_rate * gap)
     with wave.open(str(path), "wb") as handle:
         handle.setnchannels(1)
         handle.setsampwidth(2)
@@ -83,7 +90,7 @@ def resolve_sound_path() -> Path:
     custom = (settings.bell_sound or "").strip()
     path = Path(custom).expanduser() if custom else default_sound_path()
     if not path.exists():
-        synthesise_wav(path)
+        synthesise_wav(path, rings=settings.bell_rings)
     return path
 
 
@@ -100,7 +107,8 @@ def _play_windows(path: Path, blocking: bool) -> bool:
     import winsound  # type: ignore[import-not-found]
 
     flags = winsound.SND_FILENAME
-    flags |= winsound.SND_SYNC if blocking else winsound.SND_ASYNC
+    # winsound does not export SND_SYNC; the sync flag is the value 0.
+    flags |= 0 if blocking else winsound.SND_ASYNC
     winsound.PlaySound(str(path), flags)
     return True
 

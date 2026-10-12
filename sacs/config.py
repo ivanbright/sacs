@@ -16,6 +16,7 @@ SACS_SESSION_TTL_HOURS Session lifetime in hours (default ``12``).
 SACS_BELL_GRACE_SECONDS Grace window for late bell execution (default ``90``).
 SACS_BELL_AUDIO        Play the bell sound when a bell fires (default ``true``).
 SACS_BELL_SOUND        Optional path to a custom WAV bell sound.
+SACS_BELL_RINGS        Number of chimes per ring (default ``3``).
 """
 
 from __future__ import annotations
@@ -64,6 +65,9 @@ class Settings:
         default_factory=lambda: _as_bool(os.environ.get("SACS_BELL_AUDIO"), True)
     )
     bell_sound: str = field(default_factory=lambda: os.environ.get("SACS_BELL_SOUND", ""))
+    bell_rings: int = field(
+        default_factory=lambda: max(1, int(os.environ.get("SACS_BELL_RINGS", "3") or "3"))
+    )
 
     def __post_init__(self) -> None:
         self.home = Path(self.home).expanduser()
