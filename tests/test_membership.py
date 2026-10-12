@@ -42,6 +42,54 @@ def test_platform_invites_and_head_accepts(client, identities):
     assert login.status_code == 200
 
 
+def test_staff_first_login_must_change_password(client, identities):
+    sid = school_a(identities).id
+    created = client.post(
+        f"/api/schools/{sid}/staff",
+        headers=auth_headers(identities, "headA"),
+        json={"email": "firstlogin@demo.sacs", "role": "teacher", "display_name": "First"},
+    ).json()
+    temp = created["generated_password"]
+
+    login = client.post(
+        "/api/auth/login",
+        json={"email": "firstlogin@demo.sacs", "password": temp, "school_id": sid},
+    )
+    assert login.status_code == 200
+    body = login.json()
+    assert body["user"]["must_change_password"] is True
+    H = {"Authorization": f"Bearer {body['token']}"}
+
+    bad = client.post(
+        "/api/auth/change-password",
+        headers=H,
+        json={"current_password": "not-the-password", "new_password": "BrandNew123!"},
+    )
+    assert bad.status_code == 403
+
+    ok = client.post(
+        "/api/auth/change-password",
+        headers=H,
+        json={"current_password": temp, "new_password": "BrandNew123!"},
+    )
+    assert ok.status_code == 200
+
+    me = client.get("/api/auth/me", headers=H).json()
+    assert me["user"]["must_change_password"] is False
+
+    old = client.post(
+        "/api/auth/login",
+        json={"email": "firstlogin@demo.sacs", "password": temp, "school_id": sid},
+    )
+    assert old.status_code == 401
+    new = client.post(
+        "/api/auth/login",
+        json={"email": "firstlogin@demo.sacs", "password": "BrandNew123!", "school_id": sid},
+    )
+    assert new.status_code == 200
+    assert new.json()["user"]["must_change_password"] is False
+
+
 def test_unknown_invitation_token(client, identities):
     r = client.post(
         "/api/invitations/accept-token",

@@ -15,45 +15,35 @@ talks to one shared FastAPI backend exactly like a real client would.
 ```bash
 pip install sacs          # then:
 sacs start                # migrate, seed if empty, open the interactive terminal app
-sacs demo                 # migrate, seed, start the server, open the live dashboard
-sacs status               # show whether the demonstration is running
-sacs demo reset           # destroy ONLY the local demo database (requires confirmation)
-sacs demo stop            # stop the running demonstration
+sacs serve                # start the service in the foreground (no interactive app)
+sacs status               # show whether a local service is running
 sacs check                # verify dependencies and running environment
 sacs version
 ```
 
-`sacs start` opens the interactive, numbered-menu terminal application for the three
-product roles (Platform Administrator, Director, Teacher). It talks to the shared backend
-through an in-process client, so every action is authorized by the server. `0` always
-returns to the immediate parent menu; the main menu uses `0. Logout` and login uses
-`0. Exit`.
+`sacs start` is the product entry point. It opens the interactive, numbered-menu terminal
+application for the three product roles (Platform Administrator, Director, Teacher). It
+talks to the shared backend through an in-process client, so every action is authorized by
+the server. `0` always returns to the immediate parent menu; the main menu uses
+`0. Logout` and login uses `0. Exit`.
 
-`sacs demo` is the product. It:
+On first run the database is migrated to the latest schema (Alembic) and, when empty, seeded
+with two schools so there is something to sign in to. Existing data persists between restarts.
 
-1. migrates the database to the latest schema (Alembic) and seeds two schools;
-2. starts the shared SACS service on a local port;
-3. authenticates **five independently authorized identities** against the real API;
-4. shows a live multi-workspace dashboard (Rich) with keyboard commands for the teacher
-   submit → DOS review → head decide workflow, bell operations, and school administration.
+### Sign-in identities
 
-The demonstration persists between restarts (`sacs demo` again keeps your data; use
-`sacs demo reset` for a clean slate).
+The seed ships these sample identities. All use the password **`SacsDemo123!`**.
 
-### Demo identities
-
-| Workspace  | Email                          | Role          | What they can do                                   |
-| ---------- | ------------------------------ | ------------- | -------------------------------------------------- |
-| Platform   | `platform@demo.sacs`           | platform admin | create/suspend/reactivate schools, health, audit   |
-| Head       | `head.northstar@demo.sacs`     | school head   | final approve/reject, staff & academics, bells     |
-| DOS        | `dos.northstar@demo.sacs`      | director of studies | review, forward, return requests; timetable      |
-| Teacher    | `teacher.northstar@demo.sacs`  | teacher       | submit completion requests for own lessons         |
-| Bell       | `bell.northstar@demo.sacs`     | bell monitor  | monitor bell events in real time                   |
+| Role           | Email                          | What they can do                                   |
+| -------------- | ------------------------------ | -------------------------------------------------- |
+| Platform admin | `platform@demo.sacs`           | create/suspend/reactivate schools, health, audit   |
+| School head    | `head.northstar@demo.sacs`     | final approve/reject, staff & academics, bells     |
+| Director of studies | `dos.northstar@demo.sacs` | review, forward, return requests; timetable        |
+| Teacher        | `teacher.northstar@demo.sacs`  | submit completion requests for own lessons         |
+| Bell monitor   | `bell.northstar@demo.sacs`     | monitor bell events in real time                   |
 
 (Pair for `riverside-institute`: `head.riverside@demo.sacs`, `dos.riverside@demo.sacs`,
 `teacher.riverside@demo.sacs`, `bell.riverside@demo.sacs`.)
-
-All demo accounts use the password **`SacsDemo123!`**.
 
 ---
 
@@ -65,29 +55,18 @@ invitation lifecycle. The seeded demo also ships two internal demo identities (D
 Studies and bell monitor) used by the pre-existing workflow and to demonstrate read-only
 access; they are not part of the invitation flow.
 
-* The **Admin** provisions a school and invites its **Director**
-  (`school create "Name" newdirector@demo.sacs`, or `school invite <slug> <email>`).
+* The **Admin** provisions a school and invites its **Director** from **Manage Schools →
+  Register new school** (with a Director email) or **Manage Schools → Invite Director**.
   A school stays in *provisioning* until its Director accepts.
-* A **Director** invites **Teachers** to their school (`invite <email> teacher`).
-* The recipient signs in, lists their invitations and accepts one themselves — the
-  membership is created server-side. Invitations are single-use, expire after 14 days, can be
-  revoked, and store only the SHA-256 hash of their token.
+* A **Director** invites **Teachers** from **Teachers and Staff → Invite teacher**.
+* The recipient uses **Accept invitation with token** on the sign-in screen, pastes the token,
+  and chooses their own password and display name — the membership is created server-side.
+  Invitations are single-use, expire after 14 days, can be revoked, and store only the
+  SHA-256 hash of their token.
 
-Inside `sacs demo` you are always one explicit identity; commands act as that identity and the
-server still enforces every permission.
-
-```
-whoami                       # who am I, which school, which role
-session list                 # list demo identities
-session switch <email>       # act as another identity (demo only)
-invitations                  # invitations addressed to me
-accept <id>                  # accept my invitation
-help            / help session / examples
-```
-
-The two seeded candidates `newdirector@demo.sacs` and `newteacher@demo.sacs` have no
-membership yet, so the full Admin → Director → Teacher lifecycle can be demonstrated without
-adding accounts.
+Staff created directly by an administrator receive a temporary password and are required to
+change it the first time they sign in. Any signed-in user can change their own password from
+**Account → Change password**.
 
 ---
 
@@ -206,7 +185,7 @@ python -m build --no-isolation --outdir dist
 
 ```
 sacs/
-  cli.py          Typer CLI (`start`, `demo`, administration commands)
+  cli.py          Typer CLI (`start`, `serve`, `status`, `check`, `version`)
   app_menu.py     interactive terminal application (numbered-menu, all roles)
   ui.py           terminal presentation layer (colours, menus, navigation)
   api_client.py   in-process API client used by the terminal app
@@ -219,7 +198,7 @@ sacs/
   workflow.py     the completion-request state machine
   scheduler.py    deterministic clock + bell loop and outcomes
   events.py       connection manager, transactional outbox, dispatcher
-  seed.py         idempotent demo seed (two schools, five identities)
+  seed.py         idempotent sample seed (two schools, five identities)
   migrations/     Alembic baseline migration
   routers/        platform, schools, academics, timetable, requests, invitations, bell, notifications, realtime, auth
 tests/            unit + API + isolation + scheduler + terminal + packaging tests

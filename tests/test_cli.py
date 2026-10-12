@@ -35,17 +35,11 @@ def test_version_subcommand():
     assert sacs.__version__ in r.stdout
 
 
-def test_help_lists_demo():
+def test_help_lists_start():
     r = _run("--help")
     assert r.returncode == 0
-    assert "demo" in r.stdout
-
-
-def test_demo_group_help():
-    r = _run("demo", "--help")
-    assert r.returncode == 0
-    assert "reset" in r.stdout
-    assert "stop" in r.stdout
+    assert "start" in r.stdout
+    assert "demo" not in r.stdout
 
 
 def test_check_reports_ok_without_server():

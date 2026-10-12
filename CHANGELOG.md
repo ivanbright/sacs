@@ -4,6 +4,26 @@ All notable changes to SACS are documented in this file. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.2] - 2026-10-12
+
+### Removed
+- **`sacs demo` command removed entirely.** The product entry point is now `sacs start`
+  (interactive terminal app). `sacs serve`, `sacs status`, `sacs check` and
+  `sacs version` remain; the live Rich dashboard, identity-switching REPL commands
+  (`session list`/`session switch`/`whoami`/etc.) and `demo reset`/`demo stop` are gone.
+
+### Added
+- **First-login password policy.** Administrators who create staff directly issue a
+  temporary password; the new member must change it at first sign-in
+  (`POST /api/auth/change-password`). A `must_change_password` flag is set when an
+  account is created with an admin-chosen password and cleared once the owner changes it.
+- **Change password from the terminal** (`Account → Change password`).
+- **Staff deactivation/reactivation** from the Director flow
+  (`Teachers and Staff → Deactivate member / Reactivate member`), backed by
+  `PATCH /api/schools/{id}/staff/{membership_id}`.
+- **Accept an invitation with a token** directly from the sign-in screen, so a brand-new
+  school head or teacher creates their account and password without logging in first.
+
 ## [0.2.1] - 2026-10-12
 
 ### Added

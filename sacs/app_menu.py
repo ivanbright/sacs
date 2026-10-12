@@ -72,6 +72,7 @@ class TerminalApp:
     # ------------------------------------------------------------------ #
     def login_menu(self) -> Menu:
         menu = Menu("SACS - Smart Academic Coordination System", back_label="Exit", back=NAV_EXIT)
+        menu.add("Accept invitation with token", self.accept_with_token)
         menu.add("Platform Administrator", lambda: self.attempt_login("Platform Administrator"))
         menu.add("Director / School Head", lambda: self.attempt_login("Director / School Head"))
         menu.add("Teacher", lambda: self.attempt_login("Teacher"))
@@ -108,7 +109,42 @@ class TerminalApp:
         c.info(f"Role: {ROLE_LABELS.get(self.role, self.role or 'unknown')}")
         if self.school_name:
             c.info(f"School: {self.school_name}")
+        if self.me.get("user", {}).get("must_change_password"):
+            c.info("Your password was set for you. Please choose a new one to continue.")
+            if self.change_password(required=True) is None:
+                self.logout()
+                return None
         return self.main_menu()
+
+    # ------------------------------------------------------------------ #
+    # Password
+    # ------------------------------------------------------------------ #
+    def change_password(self, required: bool = False):
+        c = self.console
+        c.blank()
+        c.title("Change password")
+        try:
+            current = ask_required(c, "Current password")
+            new = ask_required(c, "New password (min 8)")
+            confirm = ask_required(c, "Confirm new password")
+        except Cancelled:
+            c.info("Cancelled.")
+            return None
+        if new != confirm:
+            c.error("Passwords do not match.")
+            return None
+        try:
+            self.api.post(
+                "/api/auth/change-password",
+                json={"current_password": current, "new_password": new},
+            )
+        except ApiError as exc:
+            c.error(str(exc.detail))
+            return None
+        if self.me and self.me.get("user"):
+            self.me["user"]["must_change_password"] = False
+        c.say("Password changed.")
+        return True
 
     # ------------------------------------------------------------------ #
     # Role dispatch
@@ -262,6 +298,7 @@ class TerminalApp:
                     c.info(f"School: {me['school']['name']} ({me['school']['status']})")
                 c.info(f"Session expires: {me.get('session_expires_at')}")
                 menu = Menu("Account", back_label="Back")
+                menu.add("Change password", self.change_password)
                 menu.add("Refresh", self.account_menu)
                 return menu
 
@@ -479,6 +516,8 @@ class TerminalApp:
             menu = Menu("Teachers and Staff", back_label="Back")
             menu.add("List staff", self.show_staff)
             menu.add("Invite teacher", self.invite_teacher)
+            menu.add("Deactivate member", lambda: self.set_staff_status("deactivated"))
+            menu.add("Reactivate member", lambda: self.set_staff_status("active"))
             menu.add("Invitations", self.school_invitations)
             return menu
 
@@ -515,6 +554,38 @@ class TerminalApp:
             return None
         c.say("Invitation created. Share this token with the teacher:")
         c.info(result.get("invitation_token", ""))
+        return None
+
+    def set_staff_status(self, status: str):
+        c = self.console
+        verb = "deactivate" if status == "deactivated" else "reactivate"
+        try:
+            rows = self.api.get(f"/api/schools/{self.school_id}/staff")
+        except ApiError as exc:
+            c.error(str(exc.detail))
+            return None
+        candidates = [m for m in rows if m["status"] != status]
+        if not candidates:
+            c.info(f"No members available to {verb}.")
+            return None
+        c.blank()
+        c.title(f"Select a member to {verb}")
+        for i, m in enumerate(candidates, 1):
+            u = m.get("user", {})
+            c.say(f"{i}. {u.get('display_name')} <{u.get('email')}> - {m['role']} ({m['status']})")
+        idx = ask_int(c, verb.capitalize(), minimum=0, maximum=len(candidates))
+        if idx == 0:
+            return None
+        chosen = candidates[idx - 1]
+        try:
+            self.api.patch(
+                f"/api/schools/{self.school_id}/staff/{chosen['id']}",
+                json={"status": status},
+            )
+        except ApiError as exc:
+            c.error(str(exc.detail))
+            return None
+        c.say(f"{chosen.get('user', {}).get('email')} is now {status}.")
         return None
 
     def school_invitations(self):

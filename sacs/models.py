@@ -143,6 +143,7 @@ class User(Base):
     is_platform_admin: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     is_demo: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    must_change_password: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, nullable=False)
 
     memberships: Mapped[list["Membership"]] = relationship(

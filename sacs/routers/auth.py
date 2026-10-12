@@ -6,11 +6,12 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy.orm import Session as OrmSession
 
+from .. import audit
 from ..db import get_db
 from ..deps import AuthContext, get_auth_context
 from ..models import Membership, School, User, utcnow
 from ..rbac import effective_permissions, membership_permissions
-from ..security import create_session, revoke_session, verify_password
+from ..security import create_session, hash_password, revoke_session, verify_password
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -66,7 +67,13 @@ def login(payload: LoginRequest, db: OrmSession = Depends(get_db)) -> LoginRespo
             db.commit()
             return LoginResponse(
                 token=token,
-                user={"id": user.id, "display_name": user.display_name, "email": user.email, "is_demo": user.is_demo},
+                user={
+                    "id": user.id,
+                    "display_name": user.display_name,
+                    "email": user.email,
+                    "is_demo": user.is_demo,
+                    "must_change_password": user.must_change_password,
+                },
                 membership=None,
                 permissions=[],
                 is_platform=False,
@@ -98,7 +105,13 @@ def login(payload: LoginRequest, db: OrmSession = Depends(get_db)) -> LoginRespo
     perms = effective_permissions(user, membership)
     return LoginResponse(
         token=token,
-        user={"id": user.id, "display_name": user.display_name, "email": user.email, "is_demo": user.is_demo},
+        user={
+            "id": user.id,
+            "display_name": user.display_name,
+            "email": user.email,
+            "is_demo": user.is_demo,
+            "must_change_password": user.must_change_password,
+        },
         membership=_serialize_membership(db, membership) if membership else None,
         permissions=sorted(perms),
         is_platform=user.is_platform_admin,
@@ -150,6 +163,7 @@ def me(
             "display_name": ctx.user.display_name,
             "email": ctx.user.email,
             "is_demo": ctx.user.is_demo,
+            "must_change_password": ctx.user.must_change_password,
         },
         membership={
             "id": membership.id,
@@ -174,3 +188,42 @@ def me(
         else None,
         session_expires_at=ctx.session.expires_at.isoformat() + "Z",
     )
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str = Field(min_length=1)
+    new_password: str = Field(min_length=8)
+
+
+@router.post("/change-password")
+def change_password(
+    payload: ChangePasswordRequest,
+    ctx: AuthContext = Depends(get_auth_context),
+    db: OrmSession = Depends(get_db),
+) -> dict:
+    """Change the authenticated user's password.
+
+    Also clears the ``must_change_password`` flag, so a school head or teacher
+    who was issued a temporary password (or is completing first-time setup) can
+    take ownership of their credentials.
+    """
+    user = ctx.user
+    if not verify_password(payload.current_password, user.password_hash):
+        raise HTTPException(status_code=403, detail="Current password is incorrect")
+    if verify_password(payload.new_password, user.password_hash):
+        raise HTTPException(status_code=422, detail="New password must differ from the current one")
+
+    user.password_hash = hash_password(payload.new_password)
+    user.must_change_password = False
+    audit.record(
+        db,
+        school_id=ctx.session.school_id,
+        actor_user_id=user.id,
+        actor_role=None,
+        action="auth.password_changed",
+        summary=f"{user.display_name} changed their password",
+        entity_type="user",
+        entity_id=user.id,
+    )
+    db.commit()
+    return {"ok": True, "must_change_password": False}

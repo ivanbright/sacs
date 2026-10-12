@@ -56,7 +56,7 @@ def test_api_client_bad_login_raises(env):
 
 
 def test_platform_login_and_browse_schools(env):
-    result, out = run_app(["1", PLATFORM_EMAIL, PASSWORD, "1", "1", "0", "0", "0"])
+    result, out = run_app(["2", PLATFORM_EMAIL, PASSWORD, "1", "1", "0", "0", "0"])
     assert result == NAV_EXIT
     assert "Platform Administrator" in out
     assert "Manage Schools" in out
@@ -64,9 +64,30 @@ def test_platform_login_and_browse_schools(env):
 
 
 def test_unauthenticated_login_failure_is_reported(env):
-    result, out = run_app(["1", PLATFORM_EMAIL, "nope", "0", "0"])
+    result, out = run_app(["2", PLATFORM_EMAIL, "nope", "0", "0"])
     assert result == NAV_EXIT
     assert "Invalid credentials" in out
+
+
+def test_first_login_forces_password_change(env):
+    school = env["schools"][0]
+    head_email = school["head_user"].email
+    sid = school["school"].id
+    with ApiClient() as api:
+        api.login(head_email, PASSWORD, sid)
+        created = api.post(
+            f"/api/schools/{sid}/staff",
+            json={"email": "mustchange@demo.sacs", "role": "teacher", "display_name": "Must Change"},
+        )
+        temp = created["generated_password"]
+
+    # 3 Teacher -> email -> temp password -> forced change (current/new/confirm)
+    # -> Teacher menu -> logout -> exit
+    result, out = run_app(
+        ["3", "mustchange@demo.sacs", temp, temp, "BrandNew123!", "BrandNew123!", "0", "0"]
+    )
+    assert result == NAV_EXIT
+    assert "Password changed" in out
 
 
 def test_teacher_can_submit_a_lesson(env):

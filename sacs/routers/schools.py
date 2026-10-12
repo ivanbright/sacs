@@ -107,6 +107,9 @@ def create_staff(
             password_hash=hash_password(generated_password),
             display_name=payload.display_name.strip(),
             is_demo=getattr(ctx.user, "is_demo", False),
+            # Someone other than the account owner chose this password, so the
+            # member must replace it the first time they sign in.
+            must_change_password=True,
         )
         db.add(user)
         db.flush()
@@ -115,6 +118,7 @@ def create_staff(
         user.display_name = payload.display_name.strip()
         if payload.password:
             user.password_hash = hash_password(payload.password)
+            user.must_change_password = True
 
     existing = (
         db.query(Membership)
