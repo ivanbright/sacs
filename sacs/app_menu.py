@@ -131,7 +131,31 @@ class TerminalApp:
     def memberless_menu(self) -> Menu:
         menu = Menu("SACS (no school membership)", back_label="Logout", back=self.logout)
         menu.add("My Invitations", self.my_invitations)
+        menu.add("Accept with invitation token", self.accept_with_token)
         return self._with_common(menu)
+
+    def accept_with_token(self):
+        c = self.console
+        c.blank()
+        try:
+            token = ask_required(c, "Invitation token")
+            password = ask_required(c, "New password (min 8)")
+            display_name = ask_required(c, "Your name")
+        except Cancelled:
+            c.info("Cancelled.")
+            return None
+        try:
+            data = self.api.post(
+                "/api/invitations/accept-token",
+                json={"token": token, "password": password, "display_name": display_name},
+            )
+            c.say("Invitation accepted.")
+            self.me = self.api.me()
+            self._apply_identity()
+            return self.main_menu()
+        except ApiError as exc:
+            c.error(str(exc.detail))
+            return None
 
     def my_invitations(self):
         try:
