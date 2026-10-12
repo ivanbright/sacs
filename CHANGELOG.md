@@ -4,6 +4,17 @@ All notable changes to SACS are documented in this file. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1] - 2026-10-12
+
+### Added
+- Bell chimes three times per ring (configurable via `SACS_BELL_RINGS`, default `3`).
+  Audio synthesis writes multiple chimes separated by a short gap.
+
+### Fixed
+- Windows `winsound` playback: use implicit synchronous flag (no `SND_SYNC`
+  attribute) so bell audio no longer fails with `AttributeError` on some
+  Windows builds.
+
 ## [0.2.0] - 2026-10-11
 
 ### Added
