@@ -109,6 +109,24 @@ def test_teacher_sees_only_own_requests(client, identities):
     assert r.status_code == 200
 
 
+def test_dos_returns_and_teacher_resubmits(client, identities):
+    sid = school_a(identities).id
+    req_id = _submit(client, identities).json()["id"]
+    ret = _transition(client, identities, req_id, "return", "dosA", reason="please fix the note")
+    assert ret.status_code == 200, ret.text
+    assert ret.json()["state"] == "returned_for_correction"
+
+    resub = _transition(client, identities, req_id, "submit", "teacherA")
+    assert resub.status_code == 200, resub.text
+    assert resub.json()["state"] == "submitted"
+
+    detail = client.get(
+        f"{REQ_PATH.format(sid=sid)}/{req_id}",
+        headers=auth_headers(identities, "teacherA"),
+    ).json()
+    assert [a["action"] for a in detail["actions"]] == ["submit", "return", "submit"]
+
+
 def test_bell_monitor_cannot_view_requests(client, identities):
     sid = school_a(identities).id
     r = client.get(f"{REQ_PATH.format(sid=sid)}", headers=auth_headers(identities, "bellA"))

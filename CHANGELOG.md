@@ -4,6 +4,15 @@ All notable changes to SACS are documented in this file. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.6] - 2026-10-12
+
+### Fixed
+- **Crash when a teacher resubmits a returned lesson request.** `workflow.apply_transition`
+  referenced `spec.actor_role` (which does not exist on `TransitionSpec`), raising
+  `AttributeError` on every transition. The redundant guard was removed; actor validation
+  is fully handled by `_validate_actor`. Lesson requests can now move through the whole
+  cycle (submit -> review -> return -> resubmit -> forward -> approve/reject).
+
 ## [0.2.5] - 2026-10-12
 
 ### Added

@@ -191,8 +191,6 @@ def apply_transition(
         raise WorkflowError("Terminal states cannot change", 422, "terminal")
     if membership.school_id != request.school_id:
         raise WorkflowError("Member does not belong to this request's school", 403, "cross_tenant")
-    if request.teacher_membership_id == membership.id and spec.actor_role == "teacher":
-        pass  # allowed path; _validate_actor confirms below
     _validate_actor(request, membership, user, spec)
 
     if spec.requires_input:
