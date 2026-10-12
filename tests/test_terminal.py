@@ -69,6 +69,56 @@ def test_unauthenticated_login_failure_is_reported(env):
     assert "Invalid credentials" in out
 
 
+def test_platform_suspend_and_reactivate_list_filtered(env):
+    school = env["schools"][0]
+    with ApiClient() as api:
+        api.login(PLATFORM_EMAIL, PASSWORD)
+        api.post(f"/api/platform/schools/{school['school'].id}/suspend")
+
+    # 1 Manage Schools -> 6 Suspend school -> only active schools shown (suspended excluded)
+    result, out = run_app(["2", PLATFORM_EMAIL, PASSWORD, "1", "6", "0", "0", "0", "0"])
+    assert result == NAV_EXIT
+    assert "Northstar Academy" not in out
+    assert "Riverside Institute" in out
+
+    # 7 Reactivate school -> only suspended schools shown -> pick it -> reactivated
+    result, out = run_app(["2", PLATFORM_EMAIL, PASSWORD, "1", "7", "1", "0", "0", "0"])
+    assert result == NAV_EXIT
+    assert "Northstar Academy" in out
+    assert "Riverside Institute" not in out
+    assert "is now active" in out
+
+
+def test_platform_admin_deactivates_and_reactivates_member(env):
+    school = env["schools"][0]
+    head_email = school["head_user"].email
+    sid = school["school"].id
+    with ApiClient() as api:
+        api.login(head_email, PASSWORD, sid)
+        created = api.post(
+            f"/api/schools/{sid}/staff",
+            json={"email": "adminvictim@demo.sacs", "role": "teacher", "display_name": "Admin Victim"},
+        )
+        victim = created["id"]
+
+    # 4 School members -> select school 1 -> verify the new teacher is listed
+    result, out = run_app(["2", PLATFORM_EMAIL, PASSWORD, "1", "4", "1", "0", "0", "0", "0"])
+    assert result == NAV_EXIT
+    assert "Admin Victim" in out
+
+    # 8 Deactivate member -> school 1 -> pick the teacher -> deactivated
+    result, out = run_app(["2", PLATFORM_EMAIL, PASSWORD, "1", "8", "1", "5", "0", "0", "0"])
+    assert result == NAV_EXIT
+    assert "adminvictim@demo.sacs" in out
+    assert "is now deactivated" in out
+
+    # 9 Reactivate member -> school 1 -> pick the teacher -> reactivated
+    result, out = run_app(["2", PLATFORM_EMAIL, PASSWORD, "1", "9", "1", "1", "0", "0", "0"])
+    assert result == NAV_EXIT
+    assert "adminvictim@demo.sacs" in out
+    assert "is now active" in out
+
+
 def test_first_login_forces_password_change(env):
     school = env["schools"][0]
     head_email = school["head_user"].email

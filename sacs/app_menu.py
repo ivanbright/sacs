@@ -242,9 +242,12 @@ class TerminalApp:
             menu.add("List all schools", self.show_schools)
             menu.add("Register new school", self.register_school)
             menu.add("View school details", self.show_school_detail_selected)
+            menu.add("School members", self.show_school_members_selected)
             menu.add("Invite Director", self.invite_director_selected)
             menu.add("Suspend school", self.suspend_selected)
             menu.add("Reactivate school", self.reactivate_selected)
+            menu.add("Deactivate member", self.deactivate_member_selected)
+            menu.add("Reactivate member", self.reactivate_member_selected)
             return menu
 
         return factory
@@ -399,14 +402,18 @@ class TerminalApp:
             c.info(token)
         return None
 
-    def pick_school(self, prompt="Select school"):
+    def pick_school(self, prompt="Select school", status=None):
         try:
             schools = self.api.get("/api/platform/schools")
         except ApiError as exc:
             self.console.error(str(exc.detail))
             return None
+        if status:
+            schools = [s for s in schools if s["status"] == status]
         if not schools:
-            self.console.info("No schools available.")
+            self.console.info(
+                f"No schools available with status '{status}'." if status else "No schools available."
+            )
             return None
         c = self.console
         c.blank()
@@ -505,18 +512,86 @@ class TerminalApp:
         return None
 
     def suspend_selected(self):
-        s = self.pick_school()
+        s = self.pick_school("Select school to suspend", status="active")
         if s is None:
             return None
         self.set_school_status(s["id"], "suspend")
         return None
 
     def reactivate_selected(self):
-        s = self.pick_school()
+        s = self.pick_school("Select school to reactivate", status="suspended")
         if s is None:
             return None
         self.set_school_status(s["id"], "reactivate")
         return None
+
+    def show_school_members_selected(self):
+        s = self.pick_school("Select school")
+        if s is None:
+            return None
+        try:
+            rows = self.api.get(f"/api/platform/schools/{s['id']}/members")
+        except ApiError as exc:
+            self.console.error(str(exc.detail))
+            return None
+        c = self.console
+        c.blank()
+        c.title(f"Members - {s['name']}")
+        if not rows:
+            c.info("No members yet.")
+            return None
+        for m in rows:
+            u = m.get("user", {})
+            c.say(f"{u.get('display_name')} <{u.get('email')}> - {m['role_label']} ({m['status']})")
+        return None
+
+    def _pick_member(self, action_label: str, status: str):
+        s = self.pick_school(f"Select school to {action_label}")
+        if s is None:
+            return None
+        try:
+            rows = self.api.get(f"/api/platform/schools/{s['id']}/members")
+        except ApiError as exc:
+            self.console.error(str(exc.detail))
+            return None
+        candidates = [m for m in rows if m["status"] == status]
+        if not candidates:
+            self.console.info(f"No {status} members in {s['name']}.")
+            return None
+        c = self.console
+        c.blank()
+        c.title(f"{s['name']} - select a member to {action_label}")
+        for i, m in enumerate(candidates, 1):
+            u = m.get("user", {})
+            c.say(f"{i}. {u.get('display_name')} <{u.get('email')}> - {m['role_label']} ({m['status']})")
+        c.say("0. Back")
+        idx = ask_int(c, action_label.capitalize(), minimum=0, maximum=len(candidates))
+        if idx == 0:
+            return None
+        return s, candidates[idx - 1]
+
+    def _set_member_status(self, action_label: str, want_status: str, new_status: str):
+        pair = self._pick_member(action_label, want_status)
+        if pair is None:
+            return None
+        s, m = pair
+        try:
+            self.api.patch(
+                f"/api/platform/schools/{s['id']}/members/{m['id']}",
+                json={"status": new_status},
+            )
+        except ApiError as exc:
+            self.console.error(str(exc.detail))
+            return None
+        u = m.get("user", {})
+        self.console.say(f"{u.get('email')} is now {new_status} in {s['name']}.")
+        return None
+
+    def deactivate_member_selected(self):
+        return self._set_member_status("deactivate", "active", "deactivated")
+
+    def reactivate_member_selected(self):
+        return self._set_member_status("reactivate", "deactivated", "active")
 
     def show_health(self):
         try:

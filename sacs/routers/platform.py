@@ -18,6 +18,9 @@ from ..events import Topic, enqueue
 from ..models import (
     BellEvent,
     CompletionRequest,
+    Membership,
+    MembershipStatus,
+    Role,
     School,
     SchoolStatus,
     User,
@@ -243,6 +246,79 @@ def reactivate_school(
     enqueue(db, Topic.SCHOOLS, {"school_id": None, "audience": "platform", "data": {"action": "reactivated", "school_id": school.id}})
     db.commit()
     return _serialize_school(db, school)
+
+
+def _member_out(m: Membership, users: dict) -> dict:
+    u = users[m.user_id]
+    return {
+        "id": m.id,
+        "user": {"id": u.id, "email": u.email, "display_name": u.display_name, "is_demo": u.is_demo},
+        "role": m.role,
+        "role_label": Role.LABELS.get(m.role, m.role),
+        "status": m.status,
+        "created_at": m.created_at.isoformat() + "Z",
+    }
+
+
+@router.get("/schools/{school_id}/members")
+def platform_list_members(
+    school_id: str,
+    ctx: AuthContext = Depends(get_auth_context),
+    db: OrmSession = Depends(get_db),
+) -> list[dict]:
+    """Platform owner views every member of a school (all roles)."""
+    require_platform(ctx, db, Perm.PLATFORM_SCHOOLS_MANAGE)
+    school = db.get(School, school_id)
+    if school is None:
+        raise HTTPException(status_code=404, detail="School not found")
+    members = (
+        db.query(Membership)
+        .filter(Membership.school_id == school_id)
+        .order_by(Membership.created_at)
+        .all()
+    )
+    users = {u.id: u for u in db.query(User).filter(User.id.in_([m.user_id for m in members])).all()}
+    return [_member_out(m, users) for m in members]
+
+
+class MemberStatusRequest(BaseModel):
+    status: str
+
+
+@router.patch("/schools/{school_id}/members/{membership_id}")
+def platform_set_member_status(
+    school_id: str,
+    membership_id: str,
+    payload: MemberStatusRequest,
+    ctx: AuthContext = Depends(get_auth_context),
+    db: OrmSession = Depends(get_db),
+) -> dict:
+    """Platform owner deactivates or reactivates a member of a school."""
+    require_platform(ctx, db, Perm.PLATFORM_SCHOOLS_MANAGE)
+    school = db.get(School, school_id)
+    if school is None:
+        raise HTTPException(status_code=404, detail="School not found")
+    membership = (
+        db.query(Membership)
+        .filter(Membership.id == membership_id, Membership.school_id == school_id)
+        .first()
+    )
+    if membership is None:
+        raise HTTPException(status_code=404, detail="Membership not found")
+    if payload.status not in (MembershipStatus.ACTIVE, MembershipStatus.DEACTIVATED):
+        raise HTTPException(status_code=422, detail="Status must be 'active' or 'deactivated'")
+    membership.status = payload.status
+    user = db.get(User, membership.user_id)
+    action = "membership.reactivated" if payload.status == MembershipStatus.ACTIVE else "membership.deactivated"
+    audit.record(
+        db, school_id=school.id, actor_user_id=ctx.user.id, actor_role="platform_admin",
+        action=action,
+        summary=f"Member {user.email if user else membership.user_id} set to {payload.status} in '{school.name}'",
+        entity_type="membership", entity_id=membership.id,
+    )
+    db.commit()
+    users = {user.id: user} if user else {}
+    return _member_out(membership, users)
 
 
 @router.get("/health")

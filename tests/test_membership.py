@@ -147,7 +147,47 @@ def test_deactivated_staff_cannot_login(client, identities):
     assert login.status_code == 401
 
 
-def test_suspend_and_reactivate_via_platform(client, identities):
+def test_platform_lists_and_toggles_members(client, identities):
+    from sacs.db import get_sessionmaker
+    from sacs.models import Membership
+
+    sid = school_a(identities).id
+    r = client.get(f"/api/platform/schools/{sid}/members", headers=auth_headers(identities, "platform"))
+    assert r.status_code == 200, r.text
+    members = r.json()
+    assert {m["role"] for m in members} >= {"school_head", "dos", "teacher", "bell_monitor"}
+    assert all(m["user"]["email"] for m in members)
+
+    victim = next(m for m in members if m["role"] == "teacher")
+    deact = client.patch(
+        f"/api/platform/schools/{sid}/members/{victim['id']}",
+        headers=auth_headers(identities, "platform"),
+        json={"status": "deactivated"},
+    )
+    assert deact.status_code == 200
+    assert deact.json()["status"] == "deactivated"
+
+    db = get_sessionmaker()()
+    assert db.get(Membership, victim["id"]).status == "deactivated"
+    db.close()
+
+    react = client.patch(
+        f"/api/platform/schools/{sid}/members/{victim['id']}",
+        headers=auth_headers(identities, "platform"),
+        json={"status": "active"},
+    )
+    assert react.status_code == 200
+    assert react.json()["status"] == "active"
+
+    bad = client.patch(
+        f"/api/platform/schools/{sid}/members/{victim['id']}",
+        headers=auth_headers(identities, "platform"),
+        json={"status": "bogus"},
+    )
+    assert bad.status_code == 422
+
+
+def test_platform_suspend_and_reactivate_via_platform(client, identities):
     from sacs.db import get_sessionmaker
     from sacs.models import School
 
