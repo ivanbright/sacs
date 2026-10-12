@@ -4,6 +4,19 @@ All notable changes to SACS are documented in this file. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.5] - 2026-10-12
+
+### Added
+- **Platform admin member control.** New endpoints `GET /api/platform/schools/{id}/members`
+  and `PATCH /api/platform/schools/{id}/members/{membership_id}` let the Administrator list
+  every member of any school and deactivate/reactivate them. The **Manage Schools** menu gains
+  *School members*, *Deactivate member* and *Reactivate member*.
+
+### Fixed
+- **Suspend/Reactivate school listed every school.** *Reactivate school* now only lists
+  `suspended` schools and *Suspend school* only lists `active` ones, so you can no longer
+  pick an active school and get a no-op "is now active" message.
+
 ## [0.2.4] - 2026-10-12
 
 ### Added
