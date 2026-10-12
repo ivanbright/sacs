@@ -4,6 +4,17 @@ All notable changes to SACS are documented in this file. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.4] - 2026-10-12
+
+### Added
+- **Director of Studies role end to end.** A dedicated "Director of Studies" sign-in option
+  and a role-specific menu (Review Lesson Requests, Timetable, Classes, Subjects, Classrooms,
+  School Bell) matching the `dos` permissions (`request.review`, `timetable.manage`,
+  `academics.manage`, `bell.view`).
+- **Create a DOS.** From **Teachers and Staff**, a Director can now *Invite Director of
+  Studies* (invitation token) or *Add Director of Studies* (temporary password, forced change
+  at first log in). Also added *Add teacher* for parity with the existing invite flow.
+
 ## [0.2.3] - 2026-10-12
 
 ### Fixed

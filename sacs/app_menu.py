@@ -75,6 +75,7 @@ class TerminalApp:
         menu.add("Accept invitation with token", self.accept_with_token)
         menu.add("Platform Administrator", lambda: self.attempt_login("Platform Administrator"))
         menu.add("Director / School Head", lambda: self.attempt_login("Director / School Head"))
+        menu.add("Director of Studies", lambda: self.attempt_login("Director of Studies"))
         menu.add("Teacher", lambda: self.attempt_login("Teacher"))
         return menu
 
@@ -152,8 +153,10 @@ class TerminalApp:
     def main_menu(self) -> Menu:
         if self.role == "platform":
             return self.platform_menu()
-        if self.role in ("school_head", "dos"):
+        if self.role == "school_head":
             return self.director_menu()
+        if self.role == "dos":
+            return self.dos_menu()
         if self.role == "teacher":
             return self.teacher_menu()
         # A user with no active membership: only notifications/account apply.
@@ -259,6 +262,42 @@ class TerminalApp:
         menu.add("Lesson Requests", self.requests_menu())
         menu.add("School Bell", self.bell_menu())
         return self._with_common(menu)
+
+    # ------------------------------------------------------------------ #
+    # Director of Studies
+    # ------------------------------------------------------------------ #
+    def dos_menu(self) -> Menu:
+        menu = Menu(
+            f"Director of Studies - {self.school_name or 'School'}",
+            back_label="Logout",
+            back=self.logout,
+        )
+        menu.add("Review Lesson Requests", self.requests_menu())
+        menu.add("Timetable", self.dos_timetable_menu())
+        menu.add("Classes", self.classes_menu())
+        menu.add("Subjects", self.subjects_menu())
+        menu.add("Classrooms", self.classrooms_menu())
+        menu.add("School Bell", self.dos_bell_menu())
+        return self._with_common(menu)
+
+    def dos_timetable_menu(self):
+        def factory() -> Menu:
+            menu = Menu("Timetable", back_label="Back")
+            menu.add("List entries", self.list_timetable)
+            menu.add("Add draft entry", self.add_timetable_entry)
+            menu.add("My school lessons", self.my_lessons)
+            return menu
+
+        return factory
+
+    def dos_bell_menu(self):
+        def factory() -> Menu:
+            menu = Menu("School Bell", back_label="Back")
+            menu.add("Schedules", self.show_bell_schedules)
+            menu.add("Recent events", self.show_bell_events)
+            return menu
+
+        return factory
 
     # ------------------------------------------------------------------ #
     # Teacher
@@ -517,6 +556,9 @@ class TerminalApp:
             menu = Menu("Teachers and Staff", back_label="Back")
             menu.add("List staff", self.show_staff)
             menu.add("Invite teacher", self.invite_teacher)
+            menu.add("Add teacher", self.add_teacher)
+            menu.add("Invite Director of Studies", self.invite_dos)
+            menu.add("Add Director of Studies", self.add_dos)
             menu.add("Deactivate member", lambda: self.set_staff_status("deactivated"))
             menu.add("Reactivate member", lambda: self.set_staff_status("active"))
             menu.add("Invitations", self.school_invitations)
@@ -556,6 +598,52 @@ class TerminalApp:
         c.say("Invitation created. Share this token with the teacher:")
         c.info(result.get("invitation_token", ""))
         return None
+
+    def invite_dos(self):
+        c = self.console
+        c.blank()
+        try:
+            email = ask_required(c, "Director of Studies email")
+        except Cancelled:
+            c.info("Cancelled.")
+            return None
+        try:
+            result = self.api.post(
+                f"/api/schools/{self.school_id}/invitations",
+                json={"email": email, "role": "dos"},
+            )
+        except ApiError as exc:
+            c.error(str(exc.detail))
+            return None
+        c.say("Invitation created. Share this token with the Director of Studies:")
+        c.info(result.get("invitation_token", ""))
+        return None
+
+    def add_teacher(self):
+        self._add_staff("teacher", "Teacher email")
+
+    def add_dos(self):
+        self._add_staff("dos", "Director of Studies email")
+
+    def _add_staff(self, role: str, email_label: str):
+        c = self.console
+        c.blank()
+        try:
+            email = ask_required(c, email_label)
+            display = ask_required(c, "Full name")
+        except Cancelled:
+            c.info("Cancelled.")
+            return None
+        try:
+            result = self.api.post(
+                f"/api/schools/{self.school_id}/staff",
+                json={"email": email, "role": role, "display_name": display},
+            )
+        except ApiError as exc:
+            c.error(str(exc.detail))
+            return None
+        c.say(f"{role} added. Temporary password (they must change it at first log in):")
+        c.info(result.get("generated_password", ""))
 
     def set_staff_status(self, status: str):
         c = self.console

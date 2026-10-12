@@ -81,10 +81,10 @@ def test_first_login_forces_password_change(env):
         )
         temp = created["generated_password"]
 
-    # 3 Teacher -> email -> temp password -> forced change (current/new/confirm)
+    # 5 Teacher -> email -> temp password -> forced change (current/new/confirm)
     # -> Teacher menu -> logout -> exit
     result, out = run_app(
-        ["3", "mustchange@demo.sacs", temp, temp, "BrandNew123!", "BrandNew123!", "0", "0"]
+        ["5", "mustchange@demo.sacs", temp, temp, "BrandNew123!", "BrandNew123!", "0", "0"]
     )
     assert result == NAV_EXIT
     assert "Password changed" in out
@@ -115,10 +115,33 @@ def test_accept_token_then_login_lands_in_director_menu(env):
     assert "Director" in out
 
 
+def test_dos_created_and_logs_into_dos_menu(env):
+    school = env["schools"][0]
+    head_email = school["head_user"].email
+    sid = school["school"].id
+    with ApiClient() as api:
+        api.login(head_email, PASSWORD, sid)
+        created = api.post(
+            f"/api/schools/{sid}/staff",
+            json={"email": "dos.new@demo.sacs", "role": "dos", "display_name": "New DOS"},
+        )
+        temp = created["generated_password"]
+
+    # 4 Director of Studies -> email -> temp password -> forced change
+    # -> DOS menu -> logout -> exit
+    result, out = run_app(
+        ["4", "dos.new@demo.sacs", temp, temp, "DosPass123!", "DosPass123!", "0", "0"]
+    )
+    assert result == NAV_EXIT
+    assert "Password changed" in out
+    assert "Director of Studies" in out
+    assert "Review Lesson Requests" in out
+
+
 def test_teacher_can_submit_a_lesson(env):
     teacher_email = env["schools"][0]["teacher_user"].email
-    # 3 Teacher -> email/password -> 3 Submit -> 1 first lesson -> blank note -> back/out
-    result, out = run_app(["3", teacher_email, PASSWORD, "3", "1", "", "0", "0", "0"])
+    # 5 Teacher -> email/password -> 3 Submit -> 1 first lesson -> blank note -> back/out
+    result, out = run_app(["5", teacher_email, PASSWORD, "3", "1", "", "0", "0", "0"])
     assert result == NAV_EXIT
     assert "Teacher" in out
     assert "Submitted" in out
